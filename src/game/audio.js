@@ -1,5 +1,6 @@
 // Lofi gerado com WebAudio: pads de acordes, arpejo suave, kick/hat leves e chiado de vinil.
-let ctx = null, master = null, timer = null, nextT = 0, step = 0, enabled = true, noiseBuf = null
+// A música passa por um canal próprio (bus): pode ser desligada ou pausada sem afetar os efeitos sonoros.
+let ctx = null, master = null, bus = null, timer = null, nextT = 0, step = 0, musicOn = true, sfxOn = true, ducked = false, volume = 1, noiseBuf = null
 
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12)
 const CHORDS = [
@@ -17,8 +18,11 @@ function ensure() {
     ctx = new (window.AudioContext || window.webkitAudioContext)()
   } catch (e) { return false }
   master = ctx.createGain()
-  master.gain.value = enabled ? 0.9 : 0
+  master.gain.value = 0.9
   master.connect(ctx.destination)
+  bus = ctx.createGain()
+  bus.gain.value = musicOn && !ducked ? volume : 0
+  bus.connect(master)
   noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate)
   const d = noiseBuf.getChannelData(0)
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1
@@ -32,14 +36,14 @@ function tone(freq, t, dur, { type = 'sine', vol = 0.05, attack = 0.02, lp = 120
   g.gain.setValueAtTime(0, t)
   g.gain.linearRampToValueAtTime(vol, t + attack)
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
-  o.connect(f).connect(g).connect(dest || master)
+  o.connect(f).connect(g).connect(dest || bus)
   o.start(t); o.stop(t + dur + 0.05)
 }
 function noise(t, dur, { vol = 0.03, hp = 6000 } = {}) {
   const s = ctx.createBufferSource(), g = ctx.createGain(), f = ctx.createBiquadFilter()
   s.buffer = noiseBuf; f.type = 'highpass'; f.frequency.value = hp
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
-  s.connect(f).connect(g).connect(master)
+  s.connect(f).connect(g).connect(bus)
   s.start(t, Math.random()); s.stop(t + dur)
 }
 
@@ -53,7 +57,7 @@ function schedule() {
       const o = ctx.createOscillator(), g = ctx.createGain()
       o.frequency.setValueAtTime(120, nextT); o.frequency.exponentialRampToValueAtTime(40, nextT + 0.15)
       g.gain.setValueAtTime(0.16, nextT); g.gain.exponentialRampToValueAtTime(0.0001, nextT + 0.2)
-      o.connect(g).connect(master); o.start(nextT); o.stop(nextT + 0.25)
+      o.connect(g).connect(bus); o.start(nextT); o.stop(nextT + 0.25)
     }
     if (pos === 2 || pos === 6) noise(nextT, 0.12, { vol: 0.05, hp: 1800 }) // snare suave
     if (pos % 2 === 1) noise(nextT, 0.04, { vol: 0.025, hp: 7000 }) // hat
@@ -74,19 +78,20 @@ export function startMusic() {
   const s = ctx.createBufferSource(), g = ctx.createGain(), f = ctx.createBiquadFilter()
   s.buffer = noiseBuf; s.loop = true; f.type = 'bandpass'; f.frequency.value = 3000
   g.gain.value = 0.012
-  s.connect(f).connect(g).connect(master); s.start()
+  s.connect(f).connect(g).connect(bus); s.start()
   nextT = ctx.currentTime + 0.1
   timer = setInterval(schedule, 200)
 }
-export function setMusic(on) {
-  enabled = on
-  if (master) master.gain.setTargetAtTime(on ? 0.9 : 0, ctx.currentTime, 0.15)
-  if (on) startMusic()
-}
+const applyBus = () => { if (bus) bus.gain.setTargetAtTime(musicOn && !ducked ? volume : 0, ctx.currentTime, 0.15) }
+export function setMusic(on) { musicOn = on; applyBus() }
+export function setMusicVolume(v) { volume = v; applyBus() }
+export function setSfx(on) { sfxOn = on }
+// silencia o lofi enquanto outra música (Spotify) estiver tocando
+export function duckMusic(on) { ducked = on; applyBus() }
 export function sfx(name) {
-  if (!ctx || !enabled) return
+  if (!ctx || !sfxOn) return
   const t = ctx.currentTime
-  if (name === 'coin') { tone(988, t, 0.18, { type: 'square', vol: 0.03, lp: 3000 }); tone(1319, t + 0.07, 0.3, { type: 'square', vol: 0.03, lp: 3000 }) }
-  else if (name === 'pop') tone(520, t, 0.1, { type: 'sine', vol: 0.06, attack: 0.005, lp: 2500 })
-  else if (name === 'chime') [523, 659, 784].forEach((f, i) => tone(f, t + i * 0.12, 0.8, { vol: 0.05, lp: 3000 }))
+  if (name === 'coin') { tone(988, t, 0.18, { type: 'square', vol: 0.03, lp: 3000, dest: master }); tone(1319, t + 0.07, 0.3, { type: 'square', vol: 0.03, lp: 3000, dest: master }) }
+  else if (name === 'pop') tone(520, t, 0.1, { type: 'sine', vol: 0.06, attack: 0.005, lp: 2500, dest: master })
+  else if (name === 'chime') [523, 659, 784].forEach((f, i) => tone(f, t + i * 0.12, 0.8, { vol: 0.05, lp: 3000, dest: master }))
 }

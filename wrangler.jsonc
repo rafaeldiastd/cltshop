@@ -1,0 +1,6 @@
+{
+  // Site estático: a Cloudflare roda "npm run build" e publica a pasta dist
+  "name": "cltshop",
+  "compatibility_date": "2026-11-01",
+  "assets": { "directory": "./dist" }
+}

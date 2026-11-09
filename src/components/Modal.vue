@@ -1,11 +1,10 @@
 <script setup>
-defineProps({ title: String, wide: Boolean })
-defineEmits(['close'])
+defineProps({ title: String, wide: Boolean, icon: Object })
 </script>
 <template>
   <div class="back">
     <div class="card box" :class="{ wide }">
-      <div class="head"><h2>{{ title }}</h2><button v-if="$attrs.onClose" class="btn sm" @click="$emit('close')">✕</button></div>
+      <div class="head"><h2><component :is="icon" v-if="icon" weight="duotone" /> {{ title }}</h2></div>
       <div class="body"><slot /></div>
       <div class="foot"><slot name="foot" /></div>
     </div>
