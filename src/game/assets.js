@@ -7,7 +7,7 @@ import { PRODUCTS, PID } from './config.js'
 // Se um arquivo não existir, o jogo usa um modelo procedural no lugar.
 const BASE = '/assets/kenney/'
 const MANIFEST = {
-  register: { urls: ['shop/cash-register.glb'], fit: { w: 0.55 } },
+  register: { urls: ['shop/cash-register.glb'], fit: { w: 0.78 } },
   basket:   { urls: ['shop/shopping-basket.glb'], fit: { s: 0.4 } },
   freezer:  { urls: ['shop/freezers-standing.glb'], fit: { s: 1.0 } },
   dFruit:   { urls: ['shop/display-fruit.glb'], fit: { s: 0.9 } },
@@ -33,7 +33,8 @@ const MANIFEST = {
   grass:    { urls: ['nature/Grass_Common_Tall.gltf'], fit: { s: 0.7 } },
   rock:     { urls: ['nature/Rock_Medium_1.gltf'], fit: { s: 0.9 } },
 }
-const CHARACTERS = ['shop/character-employee.glb', ...'abcdefghijklmnopqr'.split('').map((l) => `characters/character-${l}.glb`)]
+// só o estilo Mini: jogador e NPCs usam o mesmo modelo, e os chapéus dão a variedade
+const CHARACTERS = ['shop/character-employee.glb']
 
 const loader = new GLTFLoader()
 const store = new Map()
@@ -87,6 +88,112 @@ export function makeCharacter(i) {
   if (!chars.length) return null
   const c = chars[i % chars.length]
   return { obj: skClone(c.scene), animations: c.animations }
+}
+
+// miniaturas do seletor de personagem (geradas uma vez, em um contexto WebGL temporário)
+let thumbs = null
+export function characterThumbs(size = 112) {
+  if (thumbs) return thumbs
+  const r = new THREE.WebGLRenderer({ alpha: true, antialias: true })
+  r.setPixelRatio(1); r.setSize(size, size, false)
+  const scene = new THREE.Scene()
+  const sun = new THREE.DirectionalLight(0xffffff, 2.4); sun.position.set(1, 2, 3)
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xb09a8a, 1.6), sun)
+  const cam = new THREE.PerspectiveCamera(26, 1, 0.1, 10); cam.position.set(0.55, 0.95, 2.1); cam.lookAt(0, 0.5, 0)
+  thumbs = chars.map((c) => {
+    const o = skClone(c.scene)
+    posed(o, c.animations)
+    scene.add(o); r.render(scene, cam); scene.remove(o)
+    return r.domElement.toDataURL('image/png')
+  })
+  r.dispose(); r.forceContextLoss()
+  return thumbs
+}
+// miniatura de cada produto a partir do próprio modelo 3D (para a interface e as etiquetas)
+let products = null
+function renderProducts(size = 96) {
+  if (products) return products
+  const r = new THREE.WebGLRenderer({ alpha: true, antialias: true })
+  r.setPixelRatio(1); r.setSize(size, size, false)
+  const scene = new THREE.Scene()
+  const sun = new THREE.DirectionalLight(0xffffff, 2.6); sun.position.set(1, 3, 2)
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xb09a8a, 1.8), sun)
+  const cam = new THREE.PerspectiveCamera(24, 1, 0.01, 10)
+  products = {}
+  for (const p of PRODUCTS) {
+    const item = makeItem(p.id)
+    const bounds = new THREE.Box3().setFromObject(item)
+    const c = bounds.getCenter(new THREE.Vector3()), s = bounds.getSize(new THREE.Vector3())
+    const d = Math.max(s.x, s.y, s.z)
+    cam.position.set(c.x + d * 0.9, c.y + d * 1.4, c.z + d * 2.2); cam.lookAt(c)
+    scene.add(item); r.render(scene, cam); scene.remove(item)
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = size
+    canvas.getContext('2d').drawImage(r.domElement, 0, 0)
+    products[p.id] = { canvas, url: canvas.toDataURL('image/png') }
+  }
+  r.dispose(); r.forceContextLoss()
+  return products
+}
+export const productIcon = (id) => renderProducts()[id].canvas
+export const productThumb = (id) => renderProducts()[id].url
+
+function posed(obj, animations) {
+  const clip = animations.find((a) => a.name.toLowerCase() === 'idle') || animations[0]
+  if (!clip) return null
+  const mixer = new THREE.AnimationMixer(obj)
+  mixer.clipAction(clip).play(); mixer.update(0)
+  return mixer
+}
+export { posed as poseCharacter }
+
+export const HATS = [
+  { id: 'none', name: 'Sem chapéu' },
+  { id: 'cap', name: 'Boné' },
+  { id: 'beanie', name: 'Gorro' },
+  { id: 'straw', name: 'Chapéu' },
+  { id: 'crown', name: 'Coroa' },
+]
+export const HAT_COLORS = ['#ef8a77', '#6fb3a8', '#f2c25b', '#5b4a6e', '#f6e7cf', '#7fa6c9']
+const NPC_HATS = ['none', 'cap', 'beanie', 'straw', 'cap', 'beanie']
+export const npcLook = (h) => [NPC_HATS[Math.floor(h * NPC_HATS.length) % NPC_HATS.length], HAT_COLORS[Math.floor(h * 97) % HAT_COLORS.length]]
+
+// medidas em unidades do jogo; a base do chapéu fica em y = 0
+function makeHat(type, color) {
+  const g = new THREE.Group()
+  const col = mat(color), add = (geo, x, y, z, m = col) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = true; g.add(o); return o }
+  const R = 0.2
+  const dome = new THREE.SphereGeometry(R, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2)
+  if (type === 'cap') {
+    add(dome, 0, -0.03, 0)
+    add(new THREE.BoxGeometry(R * 1.5, 0.03, R * 1.15), 0, -0.02, R * 1.3)
+  } else if (type === 'beanie') {
+    add(dome, 0, -0.01, 0)
+    add(new THREE.CylinderGeometry(R * 1.04, R * 1.08, 0.08, 18), 0, -0.02, 0, mat(0xfff4e0))
+    add(new THREE.SphereGeometry(0.06, 10, 8), 0, R + 0.03, 0, mat(0xfff4e0))
+  } else if (type === 'straw') {
+    add(new THREE.CylinderGeometry(R * 2, R * 2.05, 0.03, 22), 0, 0, 0, mat(0xe8cf94))
+    add(new THREE.CylinderGeometry(R * 0.92, R, 0.16, 18), 0, 0.09, 0, mat(0xe8cf94))
+    add(new THREE.CylinderGeometry(R * 1.01, R * 1.02, 0.05, 18), 0, 0.04, 0)
+  } else if (type === 'crown') {
+    const gold = mat(0xf2c25b, { metalness: 0.3, roughness: 0.4 })
+    add(new THREE.CylinderGeometry(R, R, 0.08, 18), 0, 0.02, 0, gold)
+    for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; add(new THREE.ConeGeometry(0.05, 0.11, 6), Math.sin(a) * R * 0.86, 0.11, Math.cos(a) * R * 0.86, gold) }
+    add(new THREE.SphereGeometry(0.035, 8, 6), 0, 0.03, R + 0.01, mat(color))
+  }
+  return g
+}
+// o chapéu vai preso no osso da cabeça para acompanhar a animação
+export function putHat(obj, type, color) {
+  if (!type || type === 'none') return
+  const head = obj.getObjectByName('head')
+  if (!head) return
+  obj.updateWorldMatrix(true, true)
+  const top = new THREE.Box3().setFromObject(obj).max.y
+  const wp = head.getWorldPosition(new THREE.Vector3()), ws = head.getWorldScale(new THREE.Vector3())
+  const hat = makeHat(type, color)
+  hat.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z)
+  hat.position.y = (top - wp.y) / ws.y
+  head.add(hat)
 }
 
 const mat = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0, ...o })

@@ -16,4 +16,5 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; }
 .btn.good { background: var(--teal); color: #fff; box-shadow: 0 3px 0 #4d8c81; }
 .btn.sm { padding: 4px 10px; border-radius: 9px; }
 .muted { opacity: .65; font-size: .85em; }
+svg { vertical-align: -.14em; flex: none; }
 .good-t { color: var(--good); } .bad-t { color: var(--bad); }

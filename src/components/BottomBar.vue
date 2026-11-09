@@ -1,31 +1,14 @@
 <script setup>
 import { computed } from 'vue'
-import { game, ui } from '../game/state.js'
+import { PhArchive, PhArrowClockwise, PhChartBar, PhCheck, PhMoonStars, PhPlus, PhSignOut, PhTrash, PhWrench } from '@phosphor-icons/vue'
+import { game, ui, money, trashBox, storeBox } from '../game/state.js'
 import { world } from '../game/world.js'
-import { PID } from '../game/config.js'
+import { SHELF_PRICE } from '../game/config.js'
+import { rotateHeld, cancelHeld, stopEdit, buyShelf, canBuyShelf } from '../game/editor.js'
 
-const hint = computed(() => {
-  const b = game.boxes
-  if (ui.placing) return 'Clique no espaço verde para posicionar a prateleira (Esc cancela)'
-  if (game.phase === 'prep') {
-    if (b.some((x) => x.state === 'dock')) return '🚚 Chegou entrega! Clique nas caixas na calçada para RECEBER'
-    if (b.some((x) => x.state === 'stock')) return '📦 Clique nas caixas do estoque para DESEMBALAR'
-    if (b.some((x) => x.state === 'open')) return '🗃️ Clique numa caixa aberta para pegá-la, depois numa prateleira para REPOR'
-    if (game.shelves.some((s) => s.product && s.price == null)) return '🏷️ Clique numa prateleira para definir o PREÇO'
-    return '☀️ Tudo pronto! Quando quiser, abra a loja.'
-  }
-  if (game.phase === 'open' || game.phase === 'closing') {
-    if (world.queue.length && !world.player.cashiering && !game.staff.cashier) return '🧾 Tem gente na fila! Clique no balcão para atender'
-    const empty = game.shelves.find((s) => s.product && s.count === 0)
-    if (empty) return `⚠️ ${PID[empty.product].name} acabou! Reponha com as caixas do estoque`
-    const unp = game.shelves.find((s) => s.product && s.price == null)
-    if (unp) return '🏷️ Tem prateleira sem preço — clientes ignoram'
-    return ''
-  }
-  return '🌙 Faça os pedidos de amanhã e vá dormir'
-})
 const needsOrderFirst = computed(() => Object.keys(ui.cart).length > 0)
-const next = () => { if (needsOrderFirst.value) { ui.modal = 'orders' } else world.startNextDay() }
+const next = () => { if (needsOrderFirst.value) { ui.computerApp = 'products'; ui.modal = 'computer' } else world.startNextDay() }
+const emptyInHand = computed(() => game.boxes.find((b) => b.id === ui.selectedBox && b.state === 'empty'))
 </script>
 
 <template>
@@ -34,30 +17,51 @@ const next = () => { if (needsOrderFirst.value) { ui.modal = 'orders' } else wor
       {{ ui.action.label }}…
       <div class="pb"><i :style="{ width: ui.action.p * 100 + '%' }" /></div>
     </div>
-    <div v-if="hint" class="card hint">{{ hint }}</div>
-    <div class="row">
-      <button v-if="ui.placing" class="btn" @click="ui.placing = false">Cancelar</button>
-      <button v-if="game.phase === 'prep'" class="btn primary big" @click="world.openShop()">☀️ Abrir a loja</button>
-      <button v-if="game.phase === 'open'" class="btn" @click="world.closeEarly()">Fechar mais cedo</button>
-      <button v-if="game.phase === 'night' && !ui.modal" class="btn primary big" @click="next">🌙 Próximo dia</button>
-      <button v-if="game.phase === 'night' && !ui.modal" class="btn" @click="ui.modal = 'summary'">📊 Resumo</button>
+    <div v-if="ui.prompt && !ui.editing" class="prompt"><kbd>E</kbd> {{ ui.prompt }}</div>
+
+    <div v-if="emptyInHand && !ui.editing" class="card edit">
+      <div class="status"><b>Caixa vazia na mão</b><span>Clique numa prateleira para retirar itens</span></div>
+      <div class="row">
+        <button class="btn" @click="trashBox(emptyInHand.id)"><PhTrash weight="bold" /> Jogar fora</button>
+        <button class="btn good" @click="storeBox(emptyInHand.id)"><PhArchive weight="bold" /> Guardar no estoque</button>
+      </div>
     </div>
-  </div>
-  <div class="toasts">
-    <div v-for="t in ui.toasts" :key="t.id" class="toast" :class="t.kind">{{ t.msg }}</div>
+
+    <div v-if="ui.editing" class="card edit">
+      <div class="status">
+        <b><PhWrench weight="duotone" /> Layout da loja</b>
+        <span v-if="!ui.held">Clique em um móvel para mudar de lugar</span>
+        <span v-else-if="ui.held.why" class="bad-t">{{ ui.held.why }}</span>
+        <span v-else>Clique no chão para posicionar</span>
+      </div>
+      <div class="row">
+        <template v-if="ui.held">
+          <button class="btn" @click="rotateHeld"><PhArrowClockwise weight="bold" /> Girar <kbd>R</kbd></button>
+          <button class="btn" @click="cancelHeld">Cancelar</button>
+        </template>
+        <button v-else class="btn good" :disabled="!canBuyShelf()" @click="buyShelf"><PhPlus weight="bold" /> Prateleira · {{ money(SHELF_PRICE) }}</button>
+        <button class="btn primary" @click="stopEdit"><PhCheck weight="bold" /> Concluir</button>
+      </div>
+    </div>
+
+    <div v-else class="row">
+      <button v-if="ui.atRegister" class="btn primary" @click="world.leaveRegister()"><PhSignOut weight="bold" /> Sair do caixa</button>
+      <button v-if="game.phase === 'open'" class="btn" @click="world.closeEarly()">Fechar mais cedo</button>
+      <button v-if="game.phase === 'night' && !ui.modal" class="btn primary big" @click="next"><PhMoonStars weight="fill" /> Próximo dia</button>
+      <button v-if="game.phase === 'night' && !ui.modal" class="btn" @click="ui.modal = 'summary'"><PhChartBar weight="bold" /> Resumo</button>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.bottom { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 10; width: min(92vw, 720px); }
-.hint { font-weight: 700; text-align: center; }
-.row { display: flex; gap: 10px; }
+.bottom { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 10; width: min(92vw, 560px); pointer-events: none; }
+.bottom > * { pointer-events: auto; }
+.prompt { background: var(--plum); color: var(--cream); padding: 8px 16px; border-radius: 14px; font-weight: 800; box-shadow: var(--shadow); pointer-events: none; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .big { font-size: 1.15em; padding: 12px 26px; }
 .prog { min-width: 260px; font-weight: 700; }
 .pb { height: 10px; background: #e6d6bd; border-radius: 99px; overflow: hidden; margin-top: 6px; }
 .pb i { display: block; height: 100%; background: var(--teal); }
-.toasts { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; z-index: 40; pointer-events: none; }
-.toast { background: var(--plum); color: var(--cream); padding: 8px 16px; border-radius: 12px; font-weight: 700; box-shadow: var(--shadow); animation: pop .25s ease-out; }
-.toast.good { background: #3f7f63; } .toast.bad { background: #b24b43; }
-@keyframes pop { from { transform: translateY(-8px) scale(.95); opacity: 0 } }
+.edit { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.status { display: flex; flex-direction: column; align-items: center; font-size: 14px; font-weight: 600; text-align: center; }
 </style>
