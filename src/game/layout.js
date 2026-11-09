@@ -111,11 +111,10 @@ export function settleLayout(lv, { shelves, register, decor }) {
 
 export const defaultRegister = (lv) => { const d = dims(lv); return { x: d.doorX + 1, z: d.rows - 2, rot: 0 } }
 export const defaultShelves = (lv) => [0, 1, 2].map((i) => ({ x: stockRoom(lv).cols + i, z: 0, rot: 0 }))
+export const defaultFreezers = (lv) => [2, 3].map((z) => ({ x: dims(lv).cols - 1, z, rot: 3, fridge: true }))
 export const defaultDecor = (lv) => {
   const d = dims(lv), out = stockRoom(lv).doorOut
   return [
-    { type: 'freezer', x: d.cols - 1, z: 2, rot: 3 },
-    { type: 'freezer', x: d.cols - 1, z: 3, rot: 3 },
     { type: 'gacha', x: 0, z: d.rows - 3, rot: 1 },
     { type: 'plant', x: d.cols - 1, z: 1, rot: 0 },
     { type: 'plant', x: 0, z: d.rows - 1, rot: 0 },

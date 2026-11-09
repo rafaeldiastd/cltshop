@@ -10,6 +10,19 @@ const error = ref('')
 const source = computed(() => settings.playlist?.split(':')[0])
 let teardown = null
 let playerVolume = null // só o YouTube aceita volume de fora; o embed do Spotify não
+let stopWaiting = null
+
+// o navegador só libera som depois de uma interação: ao recarregar a página, volta a tocar no primeiro clique ou tecla
+function playOnFirstGesture(player) {
+  const go = () => { stopWaiting?.(); player.playVideo() }
+  stopWaiting = () => {
+    removeEventListener('pointerdown', go, true)
+    removeEventListener('keydown', go, true)
+    stopWaiting = null
+  }
+  addEventListener('pointerdown', go, true)
+  addEventListener('keydown', go, true)
+}
 
 // o script do player só é baixado quando existe uma playlist conectada
 const loaders = {}
@@ -31,6 +44,7 @@ function unmountPlayer() {
   teardown?.()
   teardown = null
   playerVolume = null
+  stopWaiting?.()
   if (host.value) host.value.innerHTML = ''
   setPlaying(false)
 }
@@ -51,9 +65,10 @@ function mountYouTube(el, spec, autoplay) {
           playerVolume = (v) => e.target.setVolume(Math.round(v * 100))
           playerVolume(settings.volume)
           if (autoplay) e.target.playVideo()
+          else playOnFirstGesture(e.target)
         },
         onStateChange: (e) => {
-          if (e.data === YT.PlayerState.PLAYING) { failures = 0; error.value = ''; setPlaying(true) }
+          if (e.data === YT.PlayerState.PLAYING) { stopWaiting?.(); failures = 0; error.value = ''; setPlaying(true) }
           else if (e.data === YT.PlayerState.PAUSED) setPlaying(false)
         },
         // alguns vídeos não permitem tocar fora do YouTube: numa playlist, pula para o próximo
@@ -127,7 +142,7 @@ const disconnect = () => { settings.playlist = null }
 
     <div v-show="settings.playlist" ref="host" class="player" />
     <template v-if="settings.playlist">
-      <p v-if="source === 'youtube'" class="muted">Toca completo. Ao recarregar a página, aperte o play de novo.</p>
+      <p v-if="source === 'youtube'" class="muted">Toca completo. Ao recarregar a página, volta a tocar no primeiro clique ou tecla.</p>
       <p v-else class="muted">Sem login no Spotify neste navegador, o player pode tocar só prévias de 30s, e o volume acima não vale para ele. O YouTube não tem essas limitações.</p>
       <button class="btn sm" @click="disconnect">Trocar música</button>
     </template>

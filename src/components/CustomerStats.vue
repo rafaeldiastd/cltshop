@@ -13,6 +13,8 @@ const rows = computed(() => {
     { label: 'Itens vendidos', now: t.units, old: p?.units },
     { label: 'Vendas', now: money(t.revenue), old: p && money(p.revenue) },
     { label: 'Desistiram da fila', now: t.patience, old: p?.patience },
+    { label: 'Roubos evitados', now: t.caught, old: p?.caught },
+    { label: 'Perdido em roubos', now: money(t.stolen), old: p && money(p.stolen || 0) },
   ]
 })
 </script>

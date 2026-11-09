@@ -1,4 +1,4 @@
-import { game, ui, hooks, toast, newStats, uid, wages, save, stockFull, money, settings } from './state.js'
+import { game, ui, hooks, toast, newStats, uid, wages, save, stockFull, money, settings, costOf, refOf, demandOf, rollMarket } from './state.js'
 import { PRODUCTS, PID, LEVELS, SHELF_CAP, DAY_SECONDS, PACK, MOODS, PETS } from './config.js'
 import { dims, cashierTile, queueTiles, doorTile, doorInside, shelfAccess, shelfPoint, stockStand, stockRoom, inStock, boxSlots, isUsable } from './layout.js'
 import { sfx } from './audio.js'
@@ -8,6 +8,7 @@ import { startEdit } from './editor.js'
 const rnd = (a, b) => a + Math.random() * (b - a)
 const key = (x, z) => x + ',' + z
 const PATIENCE = 75
+const THEFT_SECONDS = 3
 const FULL_MSG = 'Estoque cheio! Desembale, reponha ou jogue fora caixas vazias'
 
 export const go = (x, z) => ({ t: 'go', x, z })
@@ -197,6 +198,7 @@ class World {
   }
   doShelve(box, shelf, who) {
     if (!game.boxes.includes(box) || box.state !== 'open') return
+    if (this.wrongPlace(box, shelf)) return toast(this.wrongPlace(box, shelf), 'bad')
     if (shelf.product && shelf.product !== box.product && shelf.count > 0) return toast('Essa prateleira já tem outro produto', 'bad')
     const n = Math.min(box.count, SHELF_CAP - shelf.count)
     if (n <= 0) return toast('Prateleira cheia', 'bad')
@@ -206,7 +208,7 @@ class World {
     sfx('pop')
     if (box.count <= 0) {
       // a caixa do jogador fica vazia na mão; a dos repositores eles mesmos descartam
-      if (who?.kind === 'player') { box.state = 'empty'; box.product = null }
+      if (who?.kind === 'player') { box.state = 'empty'; box.product = null; box.keep = false }
       else {
         game.boxes.splice(game.boxes.indexOf(box), 1)
         if (ui.selectedBox === box.id) ui.selectedBox = null
@@ -215,6 +217,12 @@ class World {
     if (shelf.price == null && who?.kind === 'player') { ui.panelShelf = shelf.id; toast('Defina o preço dessa prateleira') }
   }
 
+  // gelados só no freezer, e o freezer só recebe gelados
+  wrongPlace(box, shelf) {
+    const cold = !!PID[box.product].cold
+    if (cold === !!shelf.fridge) return null
+    return cold ? `${PID[box.product].name} precisa ir no freezer` : 'O freezer é só para produtos gelados'
+  }
   // tira da prateleira o que couber numa caixa vazia
   doWithdraw(box, shelf) {
     if (!game.boxes.includes(box) || box.state !== 'empty' || !shelf.count) return
@@ -222,6 +230,7 @@ class World {
     box.product = shelf.product
     box.count = n
     box.state = 'open'
+    box.keep = true // retirada de propósito: o repositor não devolve à prateleira
     shelf.count -= n
     sfx('pop')
     toast(`${n} ${PID[box.product].name} ${n === 1 ? 'foi' : 'foram'} para a caixa`)
@@ -252,6 +261,7 @@ class World {
       const a = shelfAccess(shelf), pt = shelfPoint(shelf)
       this.cmd([...(this.close(this.player, pt.x, pt.z, 1.7) ? [] : [go(a.x, a.z)]), work(0.5 + 0.08 * Math.min(PACK, shelf.count), 'Retirando itens', () => this.doWithdraw(box, shelf))])
     } else if (box) {
+      if (this.wrongPlace(box, shelf)) return toast(this.wrongPlace(box, shelf), 'bad')
       if (shelf.product && shelf.product !== box.product && shelf.count > 0) return toast('Essa prateleira já tem outro produto', 'bad')
       if (shelf.count >= SHELF_CAP) return toast('Prateleira cheia', 'bad')
       this.cmd(this.shelve(box, shelf, 1, this.player))
@@ -365,6 +375,7 @@ class World {
     game.clock = 0
     this.spawnAcc = 0
     this.closeGrace = 0
+    this.planThieves()
     toast('Loja aberta!', 'good')
     sfx('chime')
   }
@@ -375,12 +386,16 @@ class World {
     const t = game.today
     const w = wages()
     game.money -= w
+    this.activeTheft = null
+    this.thiefTimes = null
     game.summary = {
-      day: game.day, revenue: t.revenue, cogs: t.cogs, wages: w, profit: t.revenue - t.cogs - w,
+      day: game.day, revenue: t.revenue, cogs: t.cogs, wages: w, profit: t.revenue - t.cogs - w - t.stolen,
+      stolen: t.stolen, stolenUnits: t.stolenUnits, caught: t.caught,
       customers: t.customers, served: t.served, units: t.units, sold: { ...t.sold },
       oos: { ...t.oos }, price: { ...t.price }, patience: t.patience, lostValue: t.lostValue, rep: game.rep, moods: { ...t.moods },
     }
     game.phase = 'night'
+    rollMarket()
     this.player.setSteps([]); this.player.cashiering = false
     ui.modal = 'summary'
     sfx('chime')
@@ -415,11 +430,11 @@ class World {
     const n = Math.random() < 0.45 ? 1 : Math.random() < 0.7 ? 2 : 3
     const bag = [...pool]
     for (let i = 0; i < n && bag.length; i++) {
-      const total = bag.reduce((s, p) => s + p.demand, 0)
+      const total = bag.reduce((s, p) => s + demandOf(p.id), 0)
       let r = Math.random() * total, pick = bag[0]
-      for (const p of bag) { if ((r -= p.demand) <= 0) { pick = p; break } }
+      for (const p of bag) { if ((r -= demandOf(p.id)) <= 0) { pick = p; break } }
       bag.splice(bag.indexOf(pick), 1)
-      c.wants.push({ pid: pick.id, qty: Math.random() < 0.6 ? 1 : 2, willing: pick.ref * rnd(0.85, 1.35) })
+      c.wants.push({ pid: pick.id, qty: Math.random() < 0.6 ? 1 : 2, willing: refOf(pick.id) * rnd(0.85, 1.35) })
     }
     game.today.customers++
     const dt = doorTile(game.level), di = doorInside(game.level)
@@ -448,7 +463,7 @@ class World {
     toast('Fechamos! Atendendo quem ficou')
     for (const c of this.customers) {
       if (c.entered) continue
-      game.today.customers--
+      if (!c.thief) game.today.customers--
       this.feel(c, 'closed')
       c.setSteps([go(c.x < this.d.cols / 2 ? -3 : this.d.cols + 2, this.d.rows + 2), call(() => this.remove(c))])
     }
@@ -461,8 +476,8 @@ class World {
     const avail = here.filter((s) => s.count > 0).sort((a, b) => a.price - b.price)
     if (!avail.length) {
       game.today.oos[w.pid] = (game.today.oos[w.pid] || 0) + w.qty
-      game.today.lostValue += w.qty * p.ref
-      this.feel(c, 'missing'); game.rep = Math.max(1, game.rep - 0.012)
+      game.today.lostValue += w.qty * refOf(w.pid)
+      this.feel(c, p.cold && game.weather === 'hot' ? 'hot' : 'missing'); game.rep = Math.max(1, game.rep - 0.012)
       return c.setSteps([wait(0.6), call(() => this.shopNext(c))])
     }
     const shelf = avail[0]
@@ -473,15 +488,15 @@ class World {
     const p = PID[w.pid]
     if (shelf.count <= 0 || shelf.product !== w.pid) {
       game.today.oos[w.pid] = (game.today.oos[w.pid] || 0) + w.qty
-      game.today.lostValue += w.qty * p.ref
+      game.today.lostValue += w.qty * refOf(w.pid)
       this.feel(c, 'missing')
     } else if (shelf.price > w.willing) {
       game.today.price[w.pid] = (game.today.price[w.pid] || 0) + w.qty
-      game.today.lostValue += w.qty * p.ref
+      game.today.lostValue += w.qty * refOf(w.pid)
       this.feel(c, 'pricey'); game.rep = Math.max(1, game.rep - 0.01)
     } else {
       let q = w.qty
-      if (shelf.price < p.ref * 0.9 && Math.random() < 0.6) q++
+      if (shelf.price < refOf(w.pid) * 0.9 && Math.random() < 0.6) q++
       q = Math.min(q, shelf.count)
       shelf.count -= q
       c.basket.push({ pid: w.pid, qty: q, price: shelf.price })
@@ -507,7 +522,7 @@ class World {
   completeSale(c) {
     const t = game.today
     let total = 0
-    for (const b of c.basket) { total += b.qty * b.price; t.units += b.qty; t.cogs += b.qty * PID[b.pid].cost; t.sold[b.pid] = (t.sold[b.pid] || 0) + b.qty }
+    for (const b of c.basket) { total += b.qty * b.price; t.units += b.qty; t.cogs += b.qty * costOf(b.pid); t.sold[b.pid] = (t.sold[b.pid] || 0) + b.qty }
     game.money += total; t.revenue += total; t.served++
     game.rep = Math.min(5, game.rep + 0.02)
     this.feel(c, 'paid', 2.6); sfx('coin')
@@ -520,6 +535,64 @@ class World {
   registerStaffed() {
     const c = cashierTile(game.register)
     return this.player.cashiering || this.staff.some((s) => s.role === 'cashier' && s.idle && Math.hypot(s.x - c.x, s.z - c.z) < 0.3)
+  }
+
+  // ---------- ladrão: aparece de vez em quando; clicar no balão em 3 segundos evita o roubo ----------
+  planThieves() {
+    const n = game.day < 2 ? 0 : Math.random() < 0.35 ? 2 : 1
+    this.thiefTimes = Array.from({ length: n }, () => rnd(0.15, 0.85) * DAY_SECONDS).filter((t) => t > game.clock).sort((a, b) => a - b)
+  }
+  spawnThief() {
+    if (this.customers.some((c) => c.thief)) return
+    const targets = game.shelves.filter((s) => s.count > 0 && s.price != null)
+    if (!targets.length) return
+    const shelf = targets[Math.floor(Math.random() * targets.length)]
+    const { cols, rows } = this.d, left = Math.random() < 0.5
+    const c = new Actor({ id: 't' + uid(), kind: 'customer', thief: true, x: left ? -3 : cols + 2, z: rows + 2, speed: 2.2, basket: [], wants: [], patience: 999, waiting: false, hue: Math.random(), felt: new Set() })
+    const dt = doorTile(game.level), di = doorInside(game.level), a = shelfAccess(shelf)
+    c.setSteps([go(dt.x, dt.z), go(di.x, di.z), call(() => (c.entered = true)), go(a.x, a.z), call(() => this.startTheft(c, shelf))])
+    this.customers.push(c)
+  }
+  startTheft(c, shelf) {
+    if (!shelf.count) return this.leave(c)
+    this.feel(c, 'sneaky', THEFT_SECONDS + 0.2)
+    c.theft = { shelf, t: THEFT_SECONDS }
+    this.activeTheft = c
+  }
+  stopTheft() {
+    const c = this.activeTheft
+    if (!c) return
+    this.activeTheft = null
+    c.theft = null
+    game.today.caught++
+    game.rep = Math.min(5, game.rep + 0.03)
+    this.feel(c, 'caught', 2.4)
+    c.speed = 3.2
+    sfx('chime')
+    toast('Ladrão impedido!', 'good')
+    this.leave(c)
+  }
+  finishTheft(c) {
+    const { shelf } = c.theft
+    this.activeTheft = null
+    c.theft = null
+    const qty = Math.min(shelf.count, 3 + Math.floor(Math.random() * 4))
+    if (qty > 0) {
+      const name = PID[shelf.product].name
+      shelf.count -= qty
+      game.today.stolen += qty * shelf.price
+      game.today.stolenUnits += qty
+      game.rep = Math.max(1, game.rep - 0.03)
+      this.feel(c, 'stole', 2.4)
+      toast(`Roubaram ${qty} de ${name}!`, 'bad')
+    }
+    c.speed = 3.2
+    this.leave(c)
+  }
+
+  // sempre existe uma caixa vazia no estoque (ou na mão), para poder retirar itens das prateleiras
+  ensureEmptyBox() {
+    if (!game.boxes.some((b) => b.state === 'empty' && !b.at)) game.boxes.push({ id: uid(), product: null, count: 0, state: 'empty', res: null })
   }
 
   // ---------- IA de equipe ----------
@@ -561,7 +634,7 @@ class World {
     const closed = game.boxes.find((b) => b.state === 'stock' && !b.res)
     if (closed) { closed.res = a.id; return a.setSteps(this.unpack(closed, M, a)) }
     for (const b of game.boxes) {
-      if (b.state !== 'open' || b.res || b.id === ui.selectedBox) continue
+      if (b.state !== 'open' || b.res || b.keep || b.at || b.id === ui.selectedBox) continue // caixa que o jogador encheu ou soltou é dele
       const sh = this.shelfFor(b)
       if (sh) { b.res = a.id; return a.setSteps(this.shelve(b, sh, M, a)) }
     }
@@ -587,6 +660,7 @@ class World {
   // ---------- loop ----------
   update(rawDt) {
     this.ensureStaff()
+    this.ensureEmptyBox()
     if (ui.atRegister !== this.player.cashiering) ui.atRegister = this.player.cashiering
     if (game.paused || ui.modal) return
     const live = game.phase === 'open' || game.phase === 'closing'
@@ -598,11 +672,16 @@ class World {
       else {
         this.spawnAcc += this.spawnRate() * dt
         while (this.spawnAcc >= 1) { this.spawnAcc -= 1; if (this.customers.length < LEVELS[game.level].maxCust) this.spawnCustomer() }
+        if (!this.thiefTimes) this.planThieves() // jogo carregado com a loja já aberta
+        while (this.thiefTimes.length && this.thiefTimes[0] <= game.clock) { this.thiefTimes.shift(); this.spawnThief() }
       }
     } else if (game.phase === 'closing') {
       this.closeGrace += dt
       if (!this.customers.length || this.closeGrace > 150) { this.customers = []; this.queue = []; this.endDay() }
     }
+
+    // o tempo do roubo não acelera no 2×: são sempre 3 segundos de verdade para reagir
+    if (this.activeTheft && (this.activeTheft.theft.t -= rawDt) <= 0) this.finishTheft(this.activeTheft)
 
     // fila
     const qt = this.queueTiles

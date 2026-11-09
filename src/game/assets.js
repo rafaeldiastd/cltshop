@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { clone as skClone } from 'three/examples/jsm/utils/SkeletonUtils.js'
-import { PRODUCTS, PID } from './config.js'
+import { PRODUCTS, PID, DECOR } from './config.js'
 
 // Coloque os .glb da Kenney em public/assets/kenney/{furniture,food,characters}.
 // Se um arquivo não existir, o jogo usa um modelo procedural no lugar.
@@ -9,7 +9,10 @@ const BASE = '/assets/kenney/'
 const MANIFEST = {
   register: { urls: ['shop/cash-register.glb'], fit: { w: 0.78 } },
   basket:   { urls: ['shop/shopping-basket.glb'], fit: { s: 0.4 } },
-  freezer:  { urls: ['shop/freezers-standing.glb'], fit: { s: 1.0 } },
+  chest:    { urls: ['shop/freezer.glb'], fit: { w: 0.94 } },
+  mannequin: { urls: ['shop/mannequin.glb'], fit: { h: 1.15 } },
+  bottles:  { urls: ['shop/bottle-return.glb'], fit: { h: 1.05 } },
+  column:   { urls: ['shop/column.glb'], fit: { h: 1.3 } },
   dFruit:   { urls: ['shop/display-fruit.glb'], fit: { s: 0.9 } },
   dBread:   { urls: ['shop/display-bread.glb'], fit: { s: 0.9 } },
   dFlowers: { urls: ['shop/display-flowers.glb'], fit: { s: 1.2 } },
@@ -110,32 +113,47 @@ export function characterThumbs(size = 112) {
   return thumbs
 }
 // miniatura de cada produto a partir do próprio modelo 3D (para a interface e as etiquetas)
-let products = null
-function renderProducts(size = 96) {
-  if (products) return products
+function studio(size = 96) {
   const r = new THREE.WebGLRenderer({ alpha: true, antialias: true })
   r.setPixelRatio(1); r.setSize(size, size, false)
   const scene = new THREE.Scene()
   const sun = new THREE.DirectionalLight(0xffffff, 2.6); sun.position.set(1, 3, 2)
   scene.add(new THREE.HemisphereLight(0xffffff, 0xb09a8a, 1.8), sun)
   const cam = new THREE.PerspectiveCamera(24, 1, 0.01, 10)
-  products = {}
-  for (const p of PRODUCTS) {
-    const item = makeItem(p.id)
-    const bounds = new THREE.Box3().setFromObject(item)
-    const c = bounds.getCenter(new THREE.Vector3()), s = bounds.getSize(new THREE.Vector3())
-    const d = Math.max(s.x, s.y, s.z)
-    cam.position.set(c.x + d * 0.9, c.y + d * 1.4, c.z + d * 2.2); cam.lookAt(c)
-    scene.add(item); r.render(scene, cam); scene.remove(item)
-    const canvas = document.createElement('canvas'); canvas.width = canvas.height = size
-    canvas.getContext('2d').drawImage(r.domElement, 0, 0)
-    products[p.id] = { canvas, url: canvas.toDataURL('image/png') }
+  return {
+    shot(obj) {
+      const bounds = new THREE.Box3().setFromObject(obj)
+      const c = bounds.getCenter(new THREE.Vector3()), s = bounds.getSize(new THREE.Vector3())
+      const d = Math.max(s.x, s.y, s.z)
+      cam.position.set(c.x + d * 0.9, c.y + d * 1.4, c.z + d * 2.2); cam.lookAt(c)
+      scene.add(obj); r.render(scene, cam); scene.remove(obj)
+      const canvas = document.createElement('canvas'); canvas.width = canvas.height = size
+      canvas.getContext('2d').drawImage(r.domElement, 0, 0)
+      return { canvas, url: canvas.toDataURL('image/png') }
+    },
+    close() { r.dispose(); r.forceContextLoss() },
   }
-  r.dispose(); r.forceContextLoss()
+}
+let products = null, decorShots = null
+function renderProducts() {
+  if (products) return products
+  const s = studio()
+  products = Object.fromEntries(PRODUCTS.map((p) => [p.id, s.shot(makeItem(p.id))]))
+  s.close()
   return products
 }
 export const productIcon = (id) => renderProducts()[id].canvas
 export const productThumb = (id) => renderProducts()[id].url
+// null quando o item não tem modelo 3D (a planta é desenhada à mão)
+export function decorThumb(type) {
+  if (!decorShots) {
+    const s = studio()
+    decorShots = {}
+    for (const [k, d] of Object.entries(DECOR)) if (d.price && store.has(k)) decorShots[k] = s.shot(make(k)).url
+    s.close()
+  }
+  return decorShots[type] || null
+}
 
 function posed(obj, animations) {
   const clip = animations.find((a) => a.name.toLowerCase() === 'idle') || animations[0]

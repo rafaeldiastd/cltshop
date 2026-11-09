@@ -14,6 +14,7 @@ import ShelfPanel from './components/ShelfPanel.vue'
 import SummaryModal from './components/SummaryModal.vue'
 import ComputerScreen from './components/ComputerScreen.vue'
 import MenuModal from './components/MenuModal.vue'
+import ThiefAlert from './components/ThiefAlert.vue'
 import { PhCrosshair } from '@phosphor-icons/vue'
 import MusicPanel from './components/MusicPanel.vue'
 
@@ -87,6 +88,7 @@ onBeforeUnmount(() => {
     <ShelfPanel />
     <BottomBar />
     <MusicPanel />
+    <ThiefAlert />
     <SummaryModal v-if="ui.modal === 'summary'" />
     <ComputerScreen v-if="ui.modal === 'computer'" />
     <MenuModal v-if="ui.modal === 'menu'" />

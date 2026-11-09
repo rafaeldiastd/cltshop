@@ -1,8 +1,8 @@
 <script setup>
-import { PhArrowsOut, PhMinus, PhPackage, PhPlus, PhReceipt, PhStack, PhStorefront, PhTrash, PhUsers, PhWrench } from '@phosphor-icons/vue'
-import { game, money, expand, hire, fire, wipeSave, newGame, wages, isClosed, stockCount, stockCap, maxShelves, emptyCount, trashEmpties } from '../game/state.js'
-import { buyShelf, canBuyShelf, startEdit } from '../game/editor.js'
-import { LEVELS, SHELF_PRICE, STAFF } from '../game/config.js'
+import { PhArrowsOut, PhMinus, PhPackage, PhPlus, PhReceipt, PhSnowflake, PhStack, PhStorefront, PhTrash, PhUsers, PhWrench } from '@phosphor-icons/vue'
+import { game, money, expand, hire, fire, wipeSave, newGame, wages, isClosed, stockCount, stockCap, maxShelves, maxFreezers, shelfCount, freezerCount, emptyCount, trashEmpties } from '../game/state.js'
+import { buyShelf, canBuyShelf, buyFreezer, canBuyFreezer, startEdit } from '../game/editor.js'
+import { LEVELS, SHELF_PRICE, FREEZER_PRICE, STAFF } from '../game/config.js'
 
 const STAFF_ICON = { cashier: PhReceipt, stocker: PhPackage }
 const next = () => LEVELS[game.level + 1]
@@ -23,12 +23,17 @@ const restart = () => { if (confirm('Começar um novo jogo? O progresso salvo se
         <div class="line">
           <PhPackage class="ico" weight="duotone" />
           <div class="col"><b>Estoque: {{ stockCount() }}/{{ stockCap() }} caixas</b><span class="muted">{{ emptyCount() }} vazia(s) guardada(s)<template v-if="next()"> · ampliando a loja vai para {{ next().stock.cap }}</template></span></div>
-          <button class="btn" :disabled="!emptyCount()" @click="trashEmpties"><PhTrash weight="bold" /> Jogar vazias fora</button>
+          <button class="btn" :disabled="emptyCount() <= 1" @click="trashEmpties"><PhTrash weight="bold" /> Jogar vazias fora</button>
         </div>
         <div class="line">
           <PhStack class="ico" weight="duotone" />
-          <div class="col"><b>Prateleiras: {{ game.shelves.length }}/{{ maxShelves() }}</b><span class="muted">{{ isClosed() ? 'escolha o lugar depois de comprar' : 'só com a loja fechada' }}</span></div>
+          <div class="col"><b>Prateleiras: {{ shelfCount() }}/{{ maxShelves() }}</b><span class="muted">{{ isClosed() ? 'escolha o lugar depois de comprar' : 'só com a loja fechada' }}</span></div>
           <button class="btn good" :disabled="!canBuyShelf()" @click="buyShelf">Comprar · {{ money(SHELF_PRICE) }}</button>
+        </div>
+        <div class="line">
+          <PhSnowflake class="ico" weight="duotone" />
+          <div class="col"><b>Freezers: {{ freezerCount() }}/{{ maxFreezers() }}</b><span class="muted">guardam os produtos gelados</span></div>
+          <button class="btn good" :disabled="!canBuyFreezer()" @click="buyFreezer">Comprar · {{ money(FREEZER_PRICE) }}</button>
         </div>
         <div class="line">
           <PhWrench class="ico" weight="duotone" />
