@@ -12,7 +12,7 @@ Cada dia: **preparação** (tempo livre) → **loja aberta** (15 min reais = 09h
 Entrega chegou? Clique nas caixas: **receber** (calçada) → **desembalar** (sala do estoque) → clique na caixa aberta e depois
 numa prateleira para **repor** → clique na prateleira para **precificar**. A caixa que esvazia fica na mão: dá para jogar fora, guardar no estoque ou usar para retirar itens de uma prateleira. Para começar o dia, **abra a loja na porta**.
 Com a loja aberta, clique no caixa para atender; com ela fechada, o caixa abre o **modo layout** para mudar os móveis de lugar.
-No **computador** da loja ficam produtos, preços, pedidos (chegam na manhã seguinte) e novos fornecedores, além de prateleiras, ampliação do espaço (o estoque cresce junto) e equipe.
+No **computador** da loja ficam as compras (chegam na manhã seguinte) e novos fornecedores, além de prateleiras, ampliação do espaço (o estoque cresce junto) e equipe. O preço de venda é definido na própria prateleira.
 No **rádio** ficam o lofi, o volume e sua música (vídeo ou playlist do YouTube, ou playlist do Spotify). Em **Menu** ficam personagem, pet, dados dos clientes, histórico de notificações e controles.
 O progresso é salvo automaticamente no navegador.
 

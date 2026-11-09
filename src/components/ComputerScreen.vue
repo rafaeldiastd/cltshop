@@ -1,11 +1,11 @@
 <script setup>
-import { PhPower, PhStorefront, PhTag } from '@phosphor-icons/vue'
+import { PhPower, PhShoppingCart, PhStorefront } from '@phosphor-icons/vue'
 import ProductsApp from './ProductsApp.vue'
 import StoreApp from './StoreApp.vue'
 import { game, ui, money, clockText } from '../game/state.js'
 
 const APPS = [
-  { id: 'products', label: 'Produtos', icon: PhTag },
+  { id: 'products', label: 'Compras', icon: PhShoppingCart },
   { id: 'store', label: 'Loja', icon: PhStorefront },
 ]
 const close = () => (ui.modal = null)
