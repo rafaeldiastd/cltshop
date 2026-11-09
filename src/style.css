@@ -1,0 +1,19 @@
+:root {
+  --cream: #fff4e0; --cream2: #f6e7cf; --plum: #3b2f4a; --plum2: #5b4a6e; --coral: #ef8a77; --teal: #6fb3a8; --mustard: #f2c25b; --bad: #e0675d; --good: #5fa879;
+  --shadow: 0 6px 22px rgba(40, 20, 50, .28);
+  font-family: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--plum);
+}
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; height: 100%; overflow: hidden; background: #2b2545; }
+button { font: inherit; color: inherit; cursor: pointer; border: 0; }
+.card { background: var(--cream); border-radius: 18px; box-shadow: var(--shadow); padding: 12px 14px; }
+.btn { background: var(--cream2); padding: 8px 14px; border-radius: 12px; font-weight: 700; box-shadow: 0 2px 0 rgba(59,47,74,.18); transition: transform .08s, filter .15s; }
+.btn:hover:not(:disabled) { filter: brightness(1.06); transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--coral); color: #fff; box-shadow: 0 3px 0 #c4604f; }
+.btn.good { background: var(--teal); color: #fff; box-shadow: 0 3px 0 #4d8c81; }
+.btn.sm { padding: 4px 10px; border-radius: 9px; }
+.muted { opacity: .65; font-size: .85em; }
+.good-t { color: var(--good); } .bad-t { color: var(--bad); }
