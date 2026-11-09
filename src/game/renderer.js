@@ -380,6 +380,12 @@ export class Renderer {
         set.add(box(0.15, 0.08, 0.02, C.cream, 0.12, 0.18, 0.095)); set.add(box(0.05, 0.05, 0.02, C.mustard, 0.12, 0.08, 0.095))
         const antenna = box(0.012, 0.36, 0.012, C.plum, 0.18, 0.44, -0.04); antenna.rotation.z = -0.25; set.add(antenna)
         model.add(set)
+      } else if (d.type === 'camera') { // câmera de segurança num poste
+        model.add(box(0.32, 0.06, 0.32, C.plum, 0, 0.03, 0)); model.add(box(0.06, 1.5, 0.06, 0x6b6570, 0, 0.78, 0))
+        const head = new THREE.Group(); head.position.set(0, 1.6, 0.08); head.rotation.x = 0.35
+        head.add(box(0.2, 0.18, 0.42, 0xe8eef4, 0, 0, 0)); head.add(box(0.14, 0.12, 0.05, C.plum, 0, 0, 0.23))
+        const led = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 6), new THREE.MeshBasicMaterial({ color: 0xe5352b, toneMapped: false })); led.position.set(0.06, 0.1, 0.12); head.add(led)
+        model.add(head)
       }
       else model.add(box(0.5, 0.7, 0.5, C.teal, 0, 0.35, 0))
     }

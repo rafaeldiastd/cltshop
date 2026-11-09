@@ -1,5 +1,5 @@
 import { game, ui, hooks, toast, newStats, uid, wages, save, stockFull, money, settings, costOf, refOf, demandOf, rollMarket } from './state.js'
-import { PRODUCTS, PID, LEVELS, SHELF_CAP, DAY_SECONDS, PACK, MOODS, PETS } from './config.js'
+import { PRODUCTS, PID, LEVELS, SHELF_CAP, DAY_SECONDS, PACK, MOODS, PETS, CAMERA_STOP_CHANCE } from './config.js'
 import { dims, cashierTile, queueTiles, doorTile, doorInside, shelfAccess, shelfPoint, stockStand, stockRoom, inStock, boxSlots, isUsable } from './layout.js'
 import { sfx } from './audio.js'
 import { hoverText } from './texts.js'
@@ -555,6 +555,7 @@ class World {
   }
   startTheft(c, shelf) {
     if (!shelf.count) return this.leave(c)
+    if (game.decor.some((d) => d.type === 'camera') && Math.random() < CAMERA_STOP_CHANCE) return this.foilTheft(c, 'A câmera de segurança afastou um ladrão!')
     this.feel(c, 'sneaky', THEFT_SECONDS + 0.2)
     c.theft = { shelf, t: THEFT_SECONDS }
     this.activeTheft = c
@@ -564,12 +565,15 @@ class World {
     if (!c) return
     this.activeTheft = null
     c.theft = null
+    this.foilTheft(c, 'Ladrão impedido!')
+  }
+  foilTheft(c, msg) {
     game.today.caught++
     game.rep = Math.min(5, game.rep + 0.03)
     this.feel(c, 'caught', 2.4)
     c.speed = 3.2
     sfx('chime')
-    toast('Ladrão impedido!', 'good')
+    toast(msg, 'good')
     this.leave(c)
   }
   finishTheft(c) {

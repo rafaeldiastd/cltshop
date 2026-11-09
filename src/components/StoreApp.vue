@@ -1,12 +1,11 @@
 <script setup>
 import { PhArrowsOut, PhMinus, PhPackage, PhPlus, PhReceipt, PhSnowflake, PhStack, PhStorefront, PhTrash, PhUsers, PhWrench } from '@phosphor-icons/vue'
-import { game, money, expand, hire, fire, wipeSave, newGame, wages, isClosed, stockCount, stockCap, maxShelves, maxFreezers, shelfCount, freezerCount, emptyCount, trashEmpties } from '../game/state.js'
+import { game, money, expand, hire, fire, restartGame, wages, isClosed, stockCount, stockCap, maxShelves, maxFreezers, shelfCount, freezerCount, emptyCount, trashEmpties } from '../game/state.js'
 import { buyShelf, canBuyShelf, buyFreezer, canBuyFreezer, startEdit } from '../game/editor.js'
 import { LEVELS, SHELF_PRICE, FREEZER_PRICE, STAFF } from '../game/config.js'
 
 const STAFF_ICON = { cashier: PhReceipt, stocker: PhPackage }
 const next = () => LEVELS[game.level + 1]
-const restart = () => { if (confirm('Começar um novo jogo? O progresso salvo será apagado.')) { wipeSave(); newGame(); location.reload() } }
 </script>
 
 <template>
@@ -54,7 +53,7 @@ const restart = () => { if (confirm('Começar um novo jogo? O progresso salvo se
         </div>
       </section>
     </div>
-    <footer><button class="btn sm" @click="restart">Novo jogo</button></footer>
+    <footer><button class="btn sm" @click="restartGame">Novo jogo</button></footer>
   </div>
 </template>
 

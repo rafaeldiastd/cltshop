@@ -1,12 +1,13 @@
 <script setup>
-import { PhPaintBrush, PhPottedPlant } from '@phosphor-icons/vue'
+import { PhPaintBrush, PhPottedPlant, PhSecurityCamera } from '@phosphor-icons/vue'
 import { money, isClosed, decorCount, sellDecor } from '../game/state.js'
-import { buyDecor, canBuyDecor } from '../game/editor.js'
+import { buyDecor, canBuyDecor, decorMaxed } from '../game/editor.js'
 import { decorThumb } from '../game/assets.js'
 import { DECOR } from '../game/config.js'
 
 const items = Object.entries(DECOR).filter(([, d]) => d.price)
 const resale = (d) => Math.floor(d.price / 2)
+const ICON = { camera: PhSecurityCamera } // itens sem modelo 3D
 </script>
 
 <template>
@@ -16,10 +17,11 @@ const resale = (d) => Math.floor(d.price / 2)
     <div class="grid">
       <article v-for="[type, d] in items" :key="type" class="item">
         <img v-if="decorThumb(type)" :src="decorThumb(type)" alt="" />
-        <PhPottedPlant v-else class="fallback" weight="duotone" />
+        <component :is="ICON[type] || PhPottedPlant" v-else class="fallback" weight="duotone" />
         <b class="name">{{ d.name }}</b>
+        <span v-if="d.desc" class="desc">{{ d.desc }}</span>
         <span class="muted">{{ decorCount(type) }} na loja</span>
-        <button class="btn good sm" :disabled="!canBuyDecor(type)" @click="buyDecor(type)">Comprar · {{ money(d.price) }}</button>
+        <button class="btn good sm" :disabled="!canBuyDecor(type)" @click="buyDecor(type)">{{ decorMaxed(type) ? 'Já instalada' : `Comprar · ${money(d.price)}` }}</button>
         <button class="btn sm" :disabled="!isClosed() || !decorCount(type)" @click="sellDecor(type)">Vender · {{ money(resale(d)) }}</button>
       </article>
     </div>
@@ -35,5 +37,6 @@ p { margin: 0; }
 .item img { width: 64px; height: 64px; }
 .fallback { font-size: 64px; color: var(--good); }
 .name { text-transform: capitalize; }
+.desc { font-size: 12px; font-weight: 700; color: var(--good); }
 .item .btn { width: 100%; }
 </style>
