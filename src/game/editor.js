@@ -1,6 +1,6 @@
 // Modo layout: pegar um móvel, escolher o lugar e soltar. Só com a loja fechada.
-import { game, ui, hooks, toast, uid, money, isClosed, maxShelves } from './state.js'
-import { SHELF_PRICE } from './config.js'
+import { game, ui, hooks, toast, uid, money, isClosed, maxShelves, maxFreezers, shelfCount, freezerCount } from './state.js'
+import { SHELF_PRICE, FREEZER_PRICE, DECOR } from './config.js'
 import { checkLayout, dims, shelfAccess, cashierTile, queueTiles } from './layout.js'
 
 const COLOR = { ok: 0x7fd6a8, bad: 0xe0675d, access: 0xf2c25b, queue: 0x7fb8e0 }
@@ -68,30 +68,46 @@ export function dropHeld() {
   const h = ui.held
   if (!h) return
   if (!h.valid) return toast(h.why, 'bad')
-  if (h.isNew && game.money < SHELF_PRICE) return toast('Caixa insuficiente', 'bad')
-  if (h.isNew) game.money -= SHELF_PRICE
+  if (h.isNew && game.money < h.price) return toast('Caixa insuficiente', 'bad')
+  if (h.isNew) game.money -= h.price
   Object.assign(find(h.kind, h.id), { x: h.x, z: h.z, rot: h.rot })
-  if (h.isNew) toast(`Prateleira instalada por ${money(SHELF_PRICE)}`, 'good')
+  if (h.isNew) toast(`Comprado por ${money(h.price)}`, 'good')
   ui.held = null
   hooks.refreshGrid()
 }
 export function cancelHeld() {
   const h = ui.held
   if (!h) return
-  if (h.isNew) game.shelves.splice(game.shelves.findIndex((s) => s.id === h.id), 1)
+  if (h.isNew) {
+    const list = h.kind === 'shelf' ? game.shelves : game.decor
+    list.splice(list.findIndex((o) => o.id === h.id), 1)
+  }
   ui.held = null
 }
 
-export const canBuyShelf = () => isClosed() && game.money >= SHELF_PRICE && game.shelves.length < maxShelves()
-export function buyShelf() {
-  if (!isClosed()) return toast('Instale prateleiras com a loja fechada', 'bad')
-  if (game.money < SHELF_PRICE) return toast('Caixa insuficiente', 'bad')
-  if (game.shelves.length >= maxShelves()) return toast('Limite de prateleiras. Amplie a loja!', 'bad')
+// item novo fica na mão e só é cobrado ao ser colocado no lugar
+function holdNew(kind, item, price) {
   if (!ui.editing) startEdit()
   cancelHeld()
   const { cols, rows } = dims(game.level)
-  const shelf = { id: uid(), x: -99, z: -99, rot: 0, product: null, count: 0, price: null }
-  game.shelves.push(shelf)
-  ui.held = { kind: 'shelf', id: shelf.id, x: Math.floor(cols / 2), z: Math.floor(rows / 2), rot: 0, isNew: true }
+  ;(kind === 'shelf' ? game.shelves : game.decor).push(item)
+  ui.held = { kind, id: item.id, x: Math.floor(cols / 2), z: Math.floor(rows / 2), rot: 0, isNew: true, price }
   evaluate()
+}
+const newShelf = (fridge) => ({ id: uid(), x: -99, z: -99, rot: 0, product: null, count: 0, price: null, fridge })
+
+export const canBuyShelf = () => isClosed() && game.money >= SHELF_PRICE && shelfCount() < maxShelves()
+export function buyShelf() {
+  if (!canBuyShelf()) return toast(isClosed() ? 'Sem caixa ou sem espaço para outra prateleira' : 'Instale móveis com a loja fechada', 'bad')
+  holdNew('shelf', newShelf(false), SHELF_PRICE)
+}
+export const canBuyFreezer = () => isClosed() && game.money >= FREEZER_PRICE && freezerCount() < maxFreezers()
+export function buyFreezer() {
+  if (!canBuyFreezer()) return toast(isClosed() ? 'Sem caixa ou sem espaço para outro freezer' : 'Instale móveis com a loja fechada', 'bad')
+  holdNew('shelf', newShelf(true), FREEZER_PRICE)
+}
+export const canBuyDecor = (type) => isClosed() && game.money >= DECOR[type].price
+export function buyDecor(type) {
+  if (!canBuyDecor(type)) return toast(isClosed() ? 'Caixa insuficiente' : 'Compre decoração com a loja fechada', 'bad')
+  holdNew('decor', { id: uid(), type, x: -99, z: -99, rot: 0 }, DECOR[type].price)
 }

@@ -1,12 +1,14 @@
 <script setup>
-import { PhPower, PhShoppingCart, PhStorefront } from '@phosphor-icons/vue'
+import { PhPaintBrush, PhPower, PhShoppingCart, PhStorefront } from '@phosphor-icons/vue'
 import ProductsApp from './ProductsApp.vue'
 import StoreApp from './StoreApp.vue'
+import DecorApp from './DecorApp.vue'
 import { game, ui, money, clockText } from '../game/state.js'
 
 const APPS = [
   { id: 'products', label: 'Compras', icon: PhShoppingCart },
   { id: 'store', label: 'Loja', icon: PhStorefront },
+  { id: 'decor', label: 'Decoração', icon: PhPaintBrush },
 ]
 const close = () => (ui.modal = null)
 </script>
@@ -29,7 +31,8 @@ const close = () => (ui.modal = null)
           </nav>
           <main class="win">
             <ProductsApp v-if="ui.computerApp === 'products'" />
-            <StoreApp v-else />
+            <StoreApp v-else-if="ui.computerApp === 'store'" />
+            <DecorApp v-else />
           </main>
         </div>
       </div>

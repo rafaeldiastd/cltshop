@@ -247,7 +247,7 @@ export class Renderer {
     if (dz + 0.5 < room.wallZ - 0.01) roomWall(room.wallX, dz + 0.5, room.wallX, room.wallZ)
     for (const s of [-0.5, 0.5]) g.add(box(0.14, 1.45, 0.14, trim, room.wallX, 0.725, dz + s))
     g.add(box(0.14, 0.1, 1.14, trim, room.wallX, 1.5, dz))
-    this.addDoor(g, room.wallX, dz - 0.44, 'z', 0.88, 1.35, 0xd9b48a, 1.7)
+    this.addDoor(g, room.wallX, dz - 0.44, 'z', 0.88, 1.35, 0xd9b48a, 1.7, (a) => a.kind === 'player' || a.role === 'stocker') // cliente passando por perto não abre
 
     g.add(box(cols + 0.4, 2.4, 0.2, wallC, cols / 2 - 0.5, 1.2, -0.6))
     g.add(box(0.2, 2.4, rows + 0.4, wallC, -0.6, 1.2, rows / 2 - 0.5))
@@ -319,13 +319,13 @@ export class Renderer {
     const fr = assets.make('dFruit'); if (fr) { fr.position.set(doorX - 2.3, 0, rows + 0.7); g.add(fr) }
   }
   // porta com dobradiça: abre sozinha quando alguém chega perto
-  addDoor(parent, x, z, axis, w, h, color, open) {
+  addDoor(parent, x, z, axis, w, h, color, open, who = () => true) {
     const pivot = new THREE.Group(); pivot.position.set(x, 0, z)
     pivot.add(axis === 'x' ? box(w, h, 0.05, color, w / 2, h / 2, 0) : box(0.05, h, w, color, 0, h / 2, w / 2))
     const glass = 0xcfe7f0
     pivot.add(axis === 'x' ? box(w * 0.6, h * 0.35, 0.07, glass, w / 2, h * 0.68, 0) : box(0.07, h * 0.35, w * 0.6, glass, 0, h * 0.68, w / 2))
     parent.add(pivot)
-    this.doors.push({ pivot, open, cx: axis === 'x' ? x + w / 2 : x, cz: axis === 'x' ? z : z + w / 2 })
+    this.doors.push({ pivot, open, who, cx: axis === 'x' ? x + w / 2 : x, cz: axis === 'x' ? z : z + w / 2 })
   }
   clockTex(h, m) {
     return labelTex(`clk|${h}|${m}`, 128, 128, (c, w, hh) => {
@@ -340,17 +340,18 @@ export class Renderer {
   // ---------- objetos dinâmicos ----------
   makeShelfView(s) {
     const gr = new THREE.Group(); gr.userData = { kind: 'shelf', id: s.id }
-    const sm = assets.make('shelf')
+    const sm = assets.make(s.fridge ? 'chest' : 'shelf')
     if (sm) gr.add(sm)
+    else if (s.fridge) { gr.add(box(0.9, 0.4, 0.6, 0xe8eef4, 0, 0.2, 0)); gr.add(box(0.84, 0.02, 0.54, 0x9fd0e0, 0, 0.41, 0)) }
     else {
       gr.add(box(0.06, 1.05, 0.46, C.woodDark, -0.45, 0.525, 0)); gr.add(box(0.06, 1.05, 0.46, C.woodDark, 0.45, 0.525, 0))
       gr.add(box(0.9, 1.05, 0.04, C.wood, 0, 0.525, -0.21))
       for (const y of [0.05, 0.4, 0.72, 1.04]) gr.add(box(0.96, 0.05, 0.5, C.wood, 0, y, 0))
     }
     const items = new THREE.Group(); gr.add(items)
-    const label = sprite(tagTex('—', '#cfc6b8'), 0.95, 0.3); label.position.set(0, 1.35, 0.05); gr.add(label)
+    const label = sprite(tagTex('—', '#cfc6b8'), 0.95, 0.3); label.position.set(0, s.fridge ? 0.95 : 1.35, 0.05); gr.add(label)
     this.scene.add(gr)
-    return { gr, items, label, key: '', pid: null, slots: [] }
+    return { gr, items, label, key: '', pid: null, slots: [], fridge: !!s.fridge }
   }
   // coloca o móvel no lugar salvo, ou na posição da mão se estiver sendo movido
   place(gr, kind, o) {
@@ -366,8 +367,7 @@ export class Renderer {
       if (d.type === 'plant') {
         model.add(box(0.35, 0.3, 0.35, C.coral, 0, 0.15, 0))
         for (let i = 0; i < 4; i++) { const s = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), std(0x5f9f62)); s.position.set((i % 2 - 0.5) * 0.18, 0.5 + i * 0.07, (i > 1 ? 1 : -1) * 0.1); s.castShadow = true; model.add(s) }
-      } else if (d.type === 'freezer') { model.add(box(0.9, 0.9, 0.5, 0xe8eef4, 0, 0.45, 0)); model.add(box(0.7, 0.6, 0.02, 0x9fd0e0, 0, 0.5, 0.26)) }
-      else if (d.type === 'computer') { // mesinha com notebook
+      } else if (d.type === 'computer') { // mesinha com notebook
         model.add(box(0.8, 0.62, 0.56, C.woodDark, 0, 0.31, 0)); model.add(box(0.9, 0.05, 0.64, C.wood, 0, 0.645, 0))
         model.add(box(0.5, 0.03, 0.34, 0x4a4458, 0, 0.685, 0.05)); model.add(box(0.5, 0.32, 0.03, 0x4a4458, 0, 0.86, -0.13))
         const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.44, 0.26), new THREE.MeshBasicMaterial({ color: 0x8fe3d0, toneMapped: false }))
@@ -403,7 +403,7 @@ export class Renderer {
   }
   syncDoors(dt) {
     for (const d of this.doors) {
-      const near = world.actors.some((a) => Math.hypot(a.x - d.cx, a.z - d.cz) < 1.1)
+      const near = world.actors.some((a) => d.who(a) && Math.hypot(a.x - d.cx, a.z - d.cz) < 1.1)
       d.pivot.rotation.y = lerp(d.pivot.rotation.y, near ? d.open : 0, Math.min(1, dt * 9))
     }
     if (this.doorSign && this.signKey !== game.phase) {
@@ -411,6 +411,13 @@ export class Renderer {
       const [text, bg] = game.phase === 'open' ? ['ABERTO', '#b9e4c4'] : game.phase === 'closing' ? ['FECHANDO', '#f8dfa2'] : ['FECHADO', '#f4a09a']
       this.doorSign.material.map = tagTex(text, bg); this.doorSign.material.needsUpdate = true
     }
+  }
+  // posição na tela do balão de roubo (o botão em si é da interface)
+  syncTheft() {
+    const c = world.activeTheft
+    if (!c) { if (ui.theft) ui.theft = null; return }
+    const p = new THREE.Vector3(c.x, 1.6, c.z).project(this.camera)
+    ui.theft = { x: ((p.x + 1) / 2) * this.canvas.clientWidth, y: ((1 - p.y) / 2) * this.canvas.clientHeight, left: c.theft.t / 3 }
   }
   syncLamp() {
     const L = this.regLamp
@@ -436,6 +443,13 @@ export class Renderer {
   fillShelfItems(v, pid) {
     v.items.clear(); v.slots = []
     if (!pid) return
+    if (v.fridge) { // arrumados por cima, em duas camadas, para aparecerem na câmera
+      for (let layer = 0; layer < 2; layer++) for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) {
+        const it = assets.makeItem(pid); it.position.set(-0.27 + c * 0.18, 0.4 + layer * 0.13, -0.17 + r * 0.17); it.rotation.y = (Math.random() - 0.5) * 0.5
+        v.items.add(it); v.slots.push(it)
+      }
+      return
+    }
     const boards = [0.075, 0.425, 0.745]
     for (const y of boards) for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) {
       const it = assets.makeItem(pid); it.position.set(-0.3 + c * 0.2, y, r ? 0.09 : -0.08); it.rotation.y = (Math.random() - 0.5) * 0.5
@@ -524,6 +538,7 @@ export class Renderer {
       ch.obj.traverse((o) => { if (o.isMesh) { o.castShadow = true } })
       if (a.kind === 'player') assets.putHat(ch.obj, settings.hat, settings.hatColor)
       else if (a.kind === 'staff') assets.putHat(ch.obj, 'cap', a.role === 'cashier' ? '#f2c25b' : '#6fb3a8')
+      else if (a.thief) assets.putHat(ch.obj, 'beanie', '#3b2f4a')
       else if (a.kind === 'customer') assets.putHat(ch.obj, ...assets.npcLook(hue))
       body.add(ch.obj)
       if (ch.animations.length) {
@@ -680,6 +695,7 @@ export class Renderer {
     if (this.builtLevel !== game.level) this.buildShop()
     this.syncShelves(dt); this.syncDecor(); this.syncBoxes(dt); this.syncActors(dt); this.syncDoors(dt); this.syncLamp(); this.syncEditor()
     this.applyTime()
+    this.syncTheft()
     const h = this.hover
     let mo = h && h.obj && !ui.modal ? h.obj : null
     const tg = world.target

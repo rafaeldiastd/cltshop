@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
-import { PhLockKey, PhMinus, PhMoonStars, PhPlus, PhShoppingCart, PhTruck } from '@phosphor-icons/vue'
-import { game, ui, money, boxCost, cartAdd, cartTotal, placeOrder, unlockProduct, stockInfo } from '../game/state.js'
+import { PhLockKey, PhMinus, PhMoonStars, PhNewspaper, PhPlus, PhShoppingCart, PhSnowflake, PhTruck } from '@phosphor-icons/vue'
+import { game, ui, money, boxCost, cartAdd, cartTotal, placeOrder, unlockProduct, stockInfo, costOf, costChange } from '../game/state.js'
 import { world } from '../game/world.js'
 import { productThumb } from '../game/assets.js'
 import { PRODUCTS, PACK } from '../game/config.js'
@@ -17,6 +17,7 @@ const sleep = () => { if (placeOrder()) world.startNextDay() }
 <template>
   <div class="app">
     <h2><PhShoppingCart weight="duotone" /> Compras</h2>
+    <div v-if="game.market.text" class="news"><PhNewspaper weight="duotone" /> {{ game.market.text }}</div>
 
     <div class="scroll">
       <div class="prod head">
@@ -25,8 +26,8 @@ const sleep = () => { if (placeOrder()) world.startNextDay() }
       <article v-for="p in open" :key="p.id" class="prod">
         <img :src="productThumb(p.id)" alt="" />
         <div class="col">
-          <b>{{ p.name }}</b>
-          <span class="muted">custo {{ money(p.cost) }} por unidade</span>
+          <b>{{ p.name }} <PhSnowflake v-if="p.cold" class="cold" weight="bold" /></b>
+          <span class="muted">custo {{ money(costOf(p.id)) }} por unidade <b v-if="costChange(p.id)" :class="costChange(p.id) > 0 ? 'bad-t' : 'good-t'">{{ costChange(p.id) > 0 ? '+' : '' }}{{ costChange(p.id) }}%</b></span>
         </div>
         <div class="col">
           <span><b>{{ stockInfo(p.id).shelves }}</b> na prateleira · <b>{{ stockInfo(p.id).boxes }}</b> em caixas</span>
@@ -47,7 +48,7 @@ const sleep = () => { if (placeOrder()) world.startNextDay() }
         <div class="suppliers">
           <button v-for="p in locked" :key="p.id" class="sup" :disabled="game.money < p.unlock" @click="unlockProduct(p.id)">
             <img :src="productThumb(p.id)" alt="" />
-            <span class="col"><b>{{ p.name }}</b><span class="small"><PhLockKey weight="fill" /> {{ money(p.unlock) }}</span></span>
+            <span class="col"><b>{{ p.name }} <PhSnowflake v-if="p.cold" class="cold" weight="bold" /></b><span class="small"><PhLockKey weight="fill" /> {{ money(p.unlock) }}</span></span>
           </button>
         </div>
       </template>
@@ -66,6 +67,8 @@ const sleep = () => { if (placeOrder()) world.startNextDay() }
 .app { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 10px; }
 h2 { margin: 0; font-size: 1.25em; }
 h3 { margin: 14px 0 6px; font-size: 1em; }
+.news { display: flex; gap: 8px; align-items: center; background: var(--mustard); border-radius: 10px; padding: 6px 12px; font-size: 14px; font-weight: 700; }
+.cold { color: #4d8fc4; }
 .scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
 .prod { display: grid; grid-template-columns: 44px minmax(150px, 1fr) minmax(220px, 1.5fr) 158px; gap: 10px; align-items: center; background: #fff; border-radius: 12px; padding: 6px 10px; font-size: 14px; }
 .prod.head { background: none; padding: 0 10px; font-size: 11px; font-weight: 800; text-transform: uppercase; opacity: .55; }

@@ -8,7 +8,7 @@ export function hoverText(hit) {
   if (!hit || ui.modal) return null
   if (ui.editing) {
     if (ui.held) return ui.held.why || null
-    if (hit.kind === 'shelf') return 'Mover prateleira'
+    if (hit.kind === 'shelf') return shelfOf(hit.id)?.fridge ? 'Mover freezer' : 'Mover prateleira'
     if (hit.kind === 'counter') return 'Mover caixa'
     if (hit.kind === 'decor') { const d = game.decor.find((x) => x.id === hit.id); return d ? `Mover ${DECOR[d.type].name}` : null }
     return null
@@ -25,7 +25,7 @@ export function hoverText(hit) {
     const s = shelfOf(hit.id); if (!s) return null
     const b = boxOf(ui.selectedBox)
     if (b?.state === 'empty') return s.count ? `Retirar ${PID[s.product].name} para a caixa` : 'Prateleira sem itens'
-    return b ? `Repor com ${PID[b.product].name}` : s.product ? `Preço de ${PID[s.product].name}` : 'Prateleira vazia — configurar'
+    return b ? `Repor com ${PID[b.product].name}` : s.product ? `Preço de ${PID[s.product].name}` : s.fridge ? 'Freezer vazio — configurar' : 'Prateleira vazia — configurar'
   }
   if (hit.kind === 'counter') return game.phase === 'open' || game.phase === 'closing' ? 'Atender no caixa' : 'Mudar layout da loja'
   if (hit.kind === 'pet') return 'Fazer carinho'

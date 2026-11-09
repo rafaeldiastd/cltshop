@@ -1,8 +1,10 @@
 <script setup>
 import { computed } from 'vue'
-import { PhList, PhPause, PhPlay, PhStar } from '@phosphor-icons/vue'
+import { PhCloudSun, PhList, PhPause, PhPlay, PhSnowflake, PhStar, PhSun } from '@phosphor-icons/vue'
 import { game, ui, money, clockText } from '../game/state.js'
-import { DAY_SECONDS } from '../game/config.js'
+import { DAY_SECONDS, WEATHER } from '../game/config.js'
+
+const WEATHER_ICON = { hot: PhSun, mild: PhCloudSun, cold: PhSnowflake }
 
 const clock = computed(() => clockText())
 const pct = computed(() => (game.phase === 'open' ? (game.clock / DAY_SECONDS) * 100 : game.phase === 'prep' ? 0 : 100))
@@ -22,6 +24,7 @@ const stars = computed(() => Math.round(game.rep))
     <div class="card pill stars" :title="`Reputação: ${game.rep.toFixed(1)} de 5`">
       <PhStar v-for="n in 5" :key="n" :weight="n <= stars ? 'fill' : 'regular'" />
     </div>
+    <div class="card pill" title="Clima: muda a procura por gelados"><component :is="WEATHER_ICON[game.weather]" weight="duotone" /> {{ WEATHER[game.weather].name }}</div>
     <div class="spacer" />
     <div v-if="game.phase === 'open' || game.phase === 'closing'" class="card pill speed">
       <button class="btn sm" :class="{ primary: game.paused }" :title="game.paused ? 'Continuar' : 'Pausar'" @click="game.paused = !game.paused"><PhPlay v-if="game.paused" weight="fill" /><PhPause v-else weight="fill" /></button>

@@ -1,14 +1,17 @@
 <script setup>
 import { computed } from 'vue'
-import { PhArchive, PhArrowClockwise, PhChartBar, PhCheck, PhMoonStars, PhPlus, PhSignOut, PhTrash, PhWrench } from '@phosphor-icons/vue'
-import { game, ui, money, trashBox, storeBox } from '../game/state.js'
+import { PhArchive, PhArrowClockwise, PhArrowLineDown, PhChartBar, PhCheck, PhMoonStars, PhPlus, PhSignOut, PhTrash, PhWrench } from '@phosphor-icons/vue'
+import { game, ui, money, trashBox, storeBox, emptyCount } from '../game/state.js'
 import { world } from '../game/world.js'
-import { SHELF_PRICE } from '../game/config.js'
+import { SHELF_PRICE, PID } from '../game/config.js'
 import { rotateHeld, cancelHeld, stopEdit, buyShelf, canBuyShelf } from '../game/editor.js'
 
 const needsOrderFirst = computed(() => Object.keys(ui.cart).length > 0)
 const next = () => { if (needsOrderFirst.value) { ui.computerApp = 'products'; ui.modal = 'computer' } else world.startNextDay() }
-const emptyInHand = computed(() => game.boxes.find((b) => b.id === ui.selectedBox && b.state === 'empty'))
+const inHand = computed(() => game.boxes.find((b) => b.id === ui.selectedBox && (b.state === 'empty' || b.state === 'open')))
+const filled = computed(() => inHand.value?.state === 'open')
+// a última caixa vazia não sai: outra apareceria no lugar
+const canTrash = computed(() => filled.value || emptyCount() > 1)
 </script>
 
 <template>
@@ -19,11 +22,15 @@ const emptyInHand = computed(() => game.boxes.find((b) => b.id === ui.selectedBo
     </div>
     <div v-if="ui.prompt && !ui.editing" class="prompt"><kbd>E</kbd> {{ ui.prompt }}</div>
 
-    <div v-if="emptyInHand && !ui.editing" class="card edit">
-      <div class="status"><b>Caixa vazia na mão</b><span>Clique numa prateleira para retirar itens</span></div>
+    <div v-if="inHand && !ui.editing" class="card edit">
+      <div class="status">
+        <b>{{ filled ? `Caixa na mão: ${inHand.count} de ${PID[inHand.product].name}` : 'Caixa vazia na mão' }}</b>
+        <span>{{ filled ? 'Clique numa prateleira para repor' : 'Clique numa prateleira para retirar itens' }}</span>
+      </div>
       <div class="row">
-        <button class="btn" @click="trashBox(emptyInHand.id)"><PhTrash weight="bold" /> Jogar fora</button>
-        <button class="btn good" @click="storeBox(emptyInHand.id)"><PhArchive weight="bold" /> Guardar no estoque</button>
+        <button class="btn" @click="world.drop()"><PhArrowLineDown weight="bold" /> Soltar aqui <kbd>Q</kbd></button>
+        <button class="btn good" @click="storeBox(inHand.id)"><PhArchive weight="bold" /> Guardar no estoque</button>
+        <button v-if="canTrash" class="btn" @click="trashBox(inHand.id)"><PhTrash weight="bold" /> {{ filled ? `Jogar fora (perde ${inHand.count})` : 'Jogar fora' }}</button>
       </div>
     </div>
 

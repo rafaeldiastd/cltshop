@@ -1,12 +1,13 @@
 import { reactive, watch } from 'vue'
-import { PRODUCTS, PID, LEVELS, STAFF, START_MONEY, PACK, DAY_SECONDS } from './config.js'
-import { stockRoom, defaultRegister, defaultShelves, defaultDecor, usableDecor, settleLayout } from './layout.js'
+import { PRODUCTS, PID, LEVELS, STAFF, START_MONEY, PACK, DAY_SECONDS, DECOR, EVENTS, WEATHER } from './config.js'
+import { stockRoom, defaultRegister, defaultShelves, defaultFreezers, defaultDecor, usableDecor, settleLayout } from './layout.js'
 
 let _id = 1
 export const uid = () => _id++
 export const hooks = { refreshGrid: () => {}, beforeSave: () => {} }
 
-export const newStats = () => ({ revenue: 0, units: 0, cogs: 0, customers: 0, served: 0, sold: {}, oos: {}, price: {}, patience: 0, lostValue: 0, moods: {} })
+export const newStats = () => ({ revenue: 0, units: 0, cogs: 0, customers: 0, served: 0, sold: {}, oos: {}, price: {}, patience: 0, lostValue: 0, moods: {}, stolen: 0, stolenUnits: 0, caught: 0 })
+const noMarket = () => ({ text: null, mods: {} })
 
 export const game = reactive({
   day: 1,
@@ -28,6 +29,8 @@ export const game = reactive({
   today: newStats(),
   summary: null,
   playerPos: null,
+  market: noMarket(),
+  weather: 'mild',
 })
 
 export const ui = reactive({
@@ -50,6 +53,7 @@ export const ui = reactive({
   panned: false,
   recenter: false,
   atRegister: false,
+  theft: null, // balão do roubo em andamento: posição na tela e tempo restante
 })
 
 // preferências ficam fora do save: sobrevivem a um "Novo jogo"
@@ -100,7 +104,7 @@ export function newGame() {
     unlocked: Object.fromEntries(PRODUCTS.filter((p) => p.unlock === 0).map((p) => [p.id, true])),
     shelves: [], register: defaultRegister(0), decor: defaultDecor(0).map((d) => ({ id: uid(), ...d })),
     boxes: [], pending: [], priceMemory: {}, staff: { cashier: 0, stocker: 0 },
-    today: newStats(), summary: null, playerPos: null,
+    today: newStats(), summary: null, playerPos: null, market: noMarket(), weather: 'mild',
   })
   ui.cart = {}
   ui.selectedBox = null
@@ -109,19 +113,35 @@ export function newGame() {
   ui.log = []
   ui.toasts = []
   // prateleiras iniciais + caixas da primeira entrega
-  for (const s of defaultShelves(0)) addShelf(s)
+  for (const s of [...defaultShelves(0), ...defaultFreezers(0)]) addShelf(s)
   for (const p of PRODUCTS.filter((p) => p.unlock === 0)) game.boxes.push({ id: uid(), product: p.id, count: PACK, state: 'dock', res: null })
   toast('Bem-vindo à lojinha! A primeira entrega está na calçada')
   hooks.refreshGrid()
 }
 
 export function addShelf(spot) {
-  game.shelves.push({ id: uid(), x: spot.x, z: spot.z, rot: spot.rot || 0, product: null, count: 0, price: null })
+  game.shelves.push({ id: uid(), x: spot.x, z: spot.z, rot: spot.rot || 0, product: null, count: 0, price: null, fridge: !!spot.fridge })
   hooks.refreshGrid()
 }
 
+// ---------- mercado: custo, preço de referência e procura variam com o evento e o clima do dia ----------
+const mod = (pid) => game.market?.mods?.[pid] || {}
+const cents = (n) => Math.round(n * 100) / 100
+export const costOf = (pid) => cents(PID[pid].cost * (mod(pid).cost ?? 1))
+export const refOf = (pid) => cents(PID[pid].ref * (mod(pid).ref ?? 1))
+export const demandOf = (pid) => PID[pid].demand * (mod(pid).demand ?? 1) * (PID[pid].cold ? WEATHER[game.weather]?.cold ?? 1 : 1)
+export const costChange = (pid) => Math.round(((mod(pid).cost ?? 1) - 1) * 100)
+export function rollMarket() {
+  const pool = EVENTS.filter((e) => Object.keys(e.mods).some((pid) => game.unlocked[pid]))
+  const e = pool.length && Math.random() < 0.85 ? pool[Math.floor(Math.random() * pool.length)] : null
+  game.market = e ? { text: e.text, mods: e.mods } : noMarket()
+  const w = Math.random()
+  game.weather = w < 0.3 ? 'hot' : w < 0.8 ? 'mild' : 'cold'
+  if (e) toast(`Notícia: ${e.text}`)
+}
+
 // ---------- compras ----------
-export const boxCost = (pid) => PID[pid].cost * PACK
+export const boxCost = (pid) => costOf(pid) * PACK
 export const cartTotal = () => Object.entries(ui.cart).reduce((s, [pid, n]) => s + n * boxCost(pid), 0)
 export function cartAdd(pid, d) {
   const n = Math.max(0, Math.min(20, (ui.cart[pid] || 0) + d))
@@ -158,21 +178,39 @@ export function setPrice(pid, value) {
   game.priceMemory[pid] = price
   for (const s of game.shelves) if (s.product === pid) s.price = price
 }
-export const stepPrice = (pid, d) => setPrice(pid, (productPrice(pid) ?? PID[pid].ref) + d)
+export const stepPrice = (pid, d) => setPrice(pid, (productPrice(pid) ?? refOf(pid)) + d)
 export function priceVerdict(pid) {
   const price = productPrice(pid)
   if (price == null) return { text: 'Sem preço', cls: 'none' }
-  const r = price / PID[pid].ref
+  const r = price / refOf(pid)
   if (r < 0.9) return { text: 'Barato', cls: 'cheap' }
   if (r < 1.15) return { text: 'Justo', cls: 'fair' }
   return { text: 'Caro', cls: 'dear' }
 }
 
 // ---------- loja ----------
-export const stockCount = () => game.boxes.filter((b) => b.state !== 'dock' && !b.at).length
+// a caixa vazia padrão não ocupa lugar na conta do estoque
+export const stockCount = () => {
+  const inside = game.boxes.filter((b) => b.state !== 'dock' && !b.at)
+  return Math.max(0, inside.length - (inside.some((b) => b.state === 'empty') ? 1 : 0))
+}
 export const stockCap = () => stockRoom(game.level).cap
 export const stockFull = () => stockCount() >= stockCap()
 export const maxShelves = () => LEVELS[game.level].maxShelves
+export const maxFreezers = () => LEVELS[game.level].maxFreezers
+export const shelfCount = () => game.shelves.filter((s) => !s.fridge).length
+export const freezerCount = () => game.shelves.filter((s) => s.fridge).length
+export const decorCount = (type) => game.decor.filter((d) => d.type === type).length
+export function sellDecor(type) {
+  const list = game.decor.filter((d) => d.type === type)
+  if (!list.length || !DECOR[type]?.price) return
+  if (!isClosed()) return toast('Venda móveis com a loja fechada', 'bad')
+  game.decor.splice(game.decor.indexOf(list[list.length - 1]), 1)
+  const value = Math.floor(DECOR[type].price / 2)
+  game.money += value
+  hooks.refreshGrid()
+  toast(`Vendeu ${DECOR[type].name} por ${money(value)}`, 'good')
+}
 export const emptyCount = () => game.boxes.filter((b) => b.state === 'empty').length
 export function storeBox(id) {
   const b = game.boxes.find((x) => x.id === id)
@@ -182,16 +220,21 @@ export function storeBox(id) {
   if (ui.selectedBox === id) ui.selectedBox = null
 }
 export function trashBox(id) {
-  const i = game.boxes.findIndex((b) => b.id === id && b.state === 'empty')
+  const i = game.boxes.findIndex((b) => b.id === id && (b.state === 'empty' || b.state === 'open'))
   if (i < 0) return
-  game.boxes.splice(i, 1)
+  const [b] = game.boxes.splice(i, 1)
   if (ui.selectedBox === id) ui.selectedBox = null
-  toast('Caixa vazia jogada fora')
+  toast(b.state === 'empty' ? 'Caixa vazia jogada fora' : `Caixa com ${b.count} de ${PID[b.product].name} jogada fora`)
 }
 export function trashEmpties() {
-  const n = emptyCount()
-  if (!n) return
-  game.boxes = game.boxes.filter((b) => b.state !== 'empty')
+  const n = emptyCount() - 1 // sempre sobra uma no estoque
+  if (n <= 0) return
+  let kept = false
+  game.boxes = game.boxes.filter((b) => {
+    if (b.state !== 'empty') return true
+    if (!kept && !b.at) { kept = true; return true }
+    return false
+  })
   if (!game.boxes.some((b) => b.id === ui.selectedBox)) ui.selectedBox = null
   toast(n === 1 ? '1 caixa vazia jogada fora' : `${n} caixas vazias jogadas fora`)
 }
@@ -214,7 +257,7 @@ export function expand() {
     if (o.z >= before.rows / 2) o.z += dz
   }
   const z = Math.ceil(before.rows / 2)
-  for (const i of [0, 1]) game.decor.push({ id: uid(), type: 'freezer', x: next.cols - 1, z: z + i, rot: 3 })
+  for (const i of [0, 1]) game.shelves.push({ id: uid(), x: next.cols - 1, z: z + i, rot: 3, product: null, count: 0, price: null, fridge: true })
   settle()
   hooks.refreshGrid()
   toast(`Loja ampliada: ${next.name}!`, 'good')
@@ -239,7 +282,9 @@ export function save() {
     hooks.beforeSave()
     const d = JSON.parse(JSON.stringify(game))
     d.boxes.forEach((b) => (b.res = null))
-    d.shelves = d.shelves.filter((s) => s.x >= 0) // prateleira nova ainda na mão não foi comprada
+    // móvel novo ainda na mão não foi comprado
+    d.shelves = d.shelves.filter((s) => s.x >= 0)
+    d.decor = d.decor.filter((o) => o.x >= 0)
     localStorage.setItem(KEY, JSON.stringify({ ...d, cart: ui.cart, log: ui.log }))
   } catch (e) { /* ignore */ }
 }
@@ -248,13 +293,18 @@ export function load() {
     const raw = localStorage.getItem(KEY)
     if (!raw) return false
     const { cart, log, ...d } = JSON.parse(raw)
-    Object.assign(game, d, { speed: 1, paused: false })
-    game.today.moods = game.today.moods || {}
+    // saves de versões anteriores não têm os campos novos: entram os valores padrão
+    Object.assign(game, { market: noMarket(), weather: 'mild' }, d, { speed: 1, paused: false })
+    game.today = { ...newStats(), ...game.today }
     game.boxes.forEach((b) => { b.res = null; b.id = uid() })
-    game.shelves.forEach((s) => { s.id = uid(); s.rot = s.rot || 0 })
-    game.register = game.register || defaultRegister(game.level)
-    game.decor = (game.decor || defaultDecor(game.level)).map((o) => ({ ...o, id: uid() }))
-    for (const d of usableDecor(game.level)) if (!game.decor.some((o) => o.type === d.type)) game.decor.push({ ...d, id: uid() })
+    game.shelves.forEach((s) => { s.id = uid(); s.rot = s.rot || 0; s.fridge = !!s.fridge })
+    game.register = d.register || defaultRegister(game.level)
+    game.decor = (d.decor || defaultDecor(game.level)).map((o) => ({ ...o, id: uid() }))
+    for (const u of usableDecor(game.level)) if (!game.decor.some((o) => o.type === u.type)) game.decor.push({ ...u, id: uid() })
+    // freezers eram decoração e agora guardam produtos; saves bem antigos nem tinham freezer salvo
+    const freezers = d.decor ? game.decor.filter((o) => o.type === 'freezer') : defaultFreezers(game.level)
+    game.decor = game.decor.filter((o) => DECOR[o.type])
+    if (!game.shelves.some((s) => s.fridge)) for (const f of freezers) addShelf({ ...f, fridge: true })
     settle()
     ui.cart = cart || {}
     ui.log = (log || []).map((m) => ({ ...m, id: uid() }))
