@@ -5,6 +5,7 @@ export const SHELF_CAP = 24
 export const PACK = 12
 export const SHELF_PRICE = 80
 export const FREEZER_PRICE = 180
+export const CAMERA_STOP_CHANCE = 0.7
 export const START_MONEY = 500
 
 // shape/color = visual procedural; model = nome do .glb no Food Kit da Kenney
@@ -94,6 +95,7 @@ export const DECOR = {
   bottles:   { name: 'retorno de garrafas', price: 80 },
   mannequin: { name: 'manequim', price: 90 },
   gacha:     { name: 'máquina de brindes', price: 120 },
+  camera:    { name: 'câmera de segurança', price: 400, max: 1, desc: 'Impede 70% dos roubos sozinha' },
   computer:  { name: 'computador' },
   radio:     { name: 'rádio' },
 }

@@ -277,7 +277,9 @@ export const wages = () => Object.entries(game.staff).reduce((s, [r, n]) => s + 
 
 // ---------- save ----------
 const KEY = 'lojinha-lofi-v1'
+let restarting = false // ao recomeçar, o salvamento automático não pode regravar o jogo antigo
 export function save() {
+  if (restarting) return
   try {
     hooks.beforeSave()
     const d = JSON.parse(JSON.stringify(game))
@@ -315,6 +317,13 @@ export function load() {
 }
 export function wipeSave() {
   try { localStorage.removeItem(KEY) } catch (e) { /* ignore */ }
+}
+// personagem, pet e música ficam nas preferências e não são apagados
+export function restartGame() {
+  if (!confirm('Recomeçar do zero? Todo o progresso salvo será apagado.')) return
+  restarting = true
+  wipeSave()
+  location.reload()
 }
 
 export const stockInfo = (pid) => ({

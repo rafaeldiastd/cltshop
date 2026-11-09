@@ -1,10 +1,10 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { PhCat, PhClockCounterClockwise, PhDog, PhGameController, PhList, PhPawPrint, PhSmiley, PhUser } from '@phosphor-icons/vue'
+import { PhArrowCounterClockwise, PhCat, PhClockCounterClockwise, PhDog, PhGameController, PhList, PhPawPrint, PhSmiley, PhUser } from '@phosphor-icons/vue'
 import Modal from './Modal.vue'
 import LogHistory from './LogHistory.vue'
 import CustomerStats from './CustomerStats.vue'
-import { settings, ui } from '../game/state.js'
+import { settings, ui, restartGame } from '../game/state.js'
 import { HATS, HAT_COLORS, characterThumbs } from '../game/assets.js'
 import { CharacterPreview } from '../game/preview.js'
 import { PETS } from '../game/config.js'
@@ -89,12 +89,16 @@ const KEYS = [
       <p class="muted">Seu progresso é salvo automaticamente neste navegador.</p>
     </div>
 
-    <template #foot><button class="btn primary" @click="close">Fechar</button></template>
+    <template #foot>
+      <button class="btn restart" @click="restartGame"><PhArrowCounterClockwise weight="bold" /> Recomeçar</button>
+      <button class="btn primary" @click="close">Fechar</button>
+    </template>
   </Modal>
 </template>
 
 <style scoped>
 .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.restart { margin-right: auto; }
 .char { display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
 .stage { width: 220px; height: 280px; background: radial-gradient(circle at 50% 70%, #fbe6c8, var(--cream2)); border-radius: 14px; }
 h3 { margin: 8px 0 6px; font-size: 1em; }

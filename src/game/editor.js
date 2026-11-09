@@ -1,5 +1,5 @@
 // Modo layout: pegar um móvel, escolher o lugar e soltar. Só com a loja fechada.
-import { game, ui, hooks, toast, uid, money, isClosed, maxShelves, maxFreezers, shelfCount, freezerCount } from './state.js'
+import { game, ui, hooks, toast, uid, money, isClosed, maxShelves, maxFreezers, shelfCount, freezerCount, decorCount } from './state.js'
 import { SHELF_PRICE, FREEZER_PRICE, DECOR } from './config.js'
 import { checkLayout, dims, shelfAccess, cashierTile, queueTiles } from './layout.js'
 
@@ -106,8 +106,9 @@ export function buyFreezer() {
   if (!canBuyFreezer()) return toast(isClosed() ? 'Sem caixa ou sem espaço para outro freezer' : 'Instale móveis com a loja fechada', 'bad')
   holdNew('shelf', newShelf(true), FREEZER_PRICE)
 }
-export const canBuyDecor = (type) => isClosed() && game.money >= DECOR[type].price
+export const decorMaxed = (type) => !!DECOR[type].max && decorCount(type) >= DECOR[type].max
+export const canBuyDecor = (type) => isClosed() && game.money >= DECOR[type].price && !decorMaxed(type)
 export function buyDecor(type) {
-  if (!canBuyDecor(type)) return toast(isClosed() ? 'Caixa insuficiente' : 'Compre decoração com a loja fechada', 'bad')
+  if (!canBuyDecor(type)) return toast(!isClosed() ? 'Compre decoração com a loja fechada' : decorMaxed(type) ? 'Você já tem esse item' : 'Caixa insuficiente', 'bad')
   holdNew('decor', { id: uid(), type, x: -99, z: -99, rot: 0 }, DECOR[type].price)
 }
