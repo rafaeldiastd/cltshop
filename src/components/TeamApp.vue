@@ -1,9 +1,9 @@
 <script setup>
 import { computed } from 'vue'
-import { PhBatteryHigh, PhBatteryLow, PhBatteryMedium, PhCheck, PhMegaphone, PhSmiley, PhSmileyMeh, PhSmileySad, PhUserPlus, PhUsersThree, PhX, PhUserMinus, PhCalendarX, PhTrendUp } from '@phosphor-icons/vue'
+import { PhHandCoins, PhBatteryHigh, PhBatteryLow, PhBatteryMedium, PhCheck, PhMegaphone, PhSmiley, PhSmileyMeh, PhSmileySad, PhUserPlus, PhUsersThree, PhX, PhUserMinus, PhCalendarX, PhTrendUp } from '@phosphor-icons/vue'
 import { game, money, wages } from '../game/state.js'
-import { STAFF, TEAM, levelXp } from '../game/config.js'
-import { memberRole, hireCandidate, hireBlock, fireMember, severance, postJobAd, answerRequest, requestText, pendingRequests, isOff, isTired, underpaid, fairWage } from '../game/team.js'
+import { STAFF, TEAM, levelXp, SKILL_SPEED, WALK_SPEED } from '../game/config.js'
+import { memberRole, hireCandidate, hireBlock, fireMember, severance, postJobAd, answerRequest, requestText, pendingRequests, isOff, isTired, underpaid, fairWage, giveRaise, raiseCost, overloaded, wageScore, energyDrain, pctText } from '../game/team.js'
 import { personThumb } from '../game/assets.js'
 
 const team = computed(() => [...game.team].sort((a, b) => Object.keys(STAFF).indexOf(a.role) - Object.keys(STAFF).indexOf(b.role)))
@@ -12,6 +12,12 @@ const mood = (m) => (m.morale >= 60 ? PhSmiley : m.morale >= 35 ? PhSmileyMeh : 
 const moodText = (m) => (m.morale >= 60 ? 'Satisfeit' : m.morale >= 35 ? 'Neutr' : 'Insatisfeit') + (m.g === 'f' ? 'a' : 'o')
 const battery = (m) => (m.energy >= 60 ? PhBatteryHigh : m.energy >= 30 ? PhBatteryMedium : PhBatteryLow)
 // quanto o salário pedido está acima ou abaixo do justo para o que a pessoa sabe fazer
+// o que cada ponto significa: competência = velocidade nas tarefas, velocidade = andar; cansaço = gasto de energia
+const skillTxt = (n) => `${pctText(SKILL_SPEED[n - 1])} nas tarefas`
+const walkTxt = (n) => `anda ${pctText(WALK_SPEED[n - 1])}`
+const drainTxt = (m) => { const d = energyDrain(m); return d < 0.8 ? 'cansa pouco' : d > 1.25 ? 'cansa rápido' : 'cansa normal' }
+// carga de ontem x salário: equilibrado, bem pago ou sobrecarregado
+const loadInfo = (m) => (m.lastLoad == null ? null : overloaded(m) ? { text: m.lastLoad >= 0.5 ? 'sobrecarregado' : 'mal pago', cls: 'bad' } : wageScore(m) > 1.12 ? { text: 'bem pago', cls: 'ok' } : { text: 'equilibrado', cls: 'mid' })
 const deal = (c) => {
   const r = c.wage / fairWage(c.role, c.skill, c.speed)
   return r < 0.95 ? { text: 'pechincha', cls: 'good-t' } : r > 1.07 ? { text: 'pede acima', cls: 'bad-t' } : null
@@ -57,6 +63,11 @@ const deal = (c) => {
           <div class="stat"><span>Experiência</span><span class="mini"><i :style="{ width: (m.xp / levelXp(m.level)) * 100 + '%' }" /></span></div>
           <div class="stat"><span><component :is="battery(m)" weight="bold" /> Energia</span><span class="mini" :class="{ low: isTired(m) }"><i :style="{ width: m.energy + '%' }" /></span></div>
           <div class="stat"><span><component :is="mood(m)" weight="bold" /> {{ moodText(m) }}</span><span class="mini mood"><i :style="{ width: m.morale + '%' }" /></span></div>
+          <div class="stat" :title="'Quanto ficou ocupado no último expediente, comparado ao que ganha por dia'">
+            <span>Carga</span>
+            <span v-if="loadInfo(m)" class="chip" :class="loadInfo(m).cls">{{ loadInfo(m).text }}</span>
+          </div>
+          <button class="btn sm good raise" :title="'Aumenta o salário diário e anima a pessoa'" @click="giveRaise(m.id)"><PhHandCoins weight="bold" /> Dar aumento · +{{ money(raiseCost(m)) }}/dia</button>
           <div class="foot">
             <span><b>{{ money(m.wage) }}</b>/dia <span v-if="underpaid(m)" class="bad-t small" title="Subiu de nível e ganha abaixo do justo"><PhTrendUp weight="bold" /> abaixo do justo</span></span>
             <button class="btn sm" :title="`Rescisão de ${money(severance(m))}`" @click="fireMember(m.id)"><PhUserMinus weight="bold" /> Demitir · {{ money(severance(m)) }}</button>
@@ -68,7 +79,7 @@ const deal = (c) => {
         <h3>Catálogo de candidatos</h3>
         <button class="btn sm" :disabled="game.money < TEAM.adCost" @click="postJobAd"><PhMegaphone weight="bold" /> Novo anúncio · {{ money(TEAM.adCost) }}</button>
       </div>
-      <p class="muted small">Todo dia chegam {{ TEAM.newPerDay }} candidatos novos. Competência deixa as tarefas mais rápidas (e o caixa mais ágil); velocidade faz andar mais rápido.</p>
+      <p class="muted small">Todo dia chegam {{ TEAM.newPerDay }} candidatos novos. </p>
       <div class="cards">
         <article v-for="c in game.candidates" :key="c.id" class="person cand">
           <div class="top">
@@ -120,5 +131,9 @@ p { margin: 2px 0; }
 .mini.mood i { background: var(--mustard); }
 .foot { display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 .cand .btn { width: 100%; }
+.hint { font-style: normal; font-size: 11px; opacity: .65; margin-left: 4px; }
+.raise { width: 100%; }
+.chip { font-size: 11px; font-weight: 800; padding: 2px 9px; border-radius: 99px; background: var(--cream2); }
+.chip.bad { background: #f4c3bd; color: #8a2e26; } .chip.ok { background: #d9efdf; color: #245c43; }
 .cand-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 </style>

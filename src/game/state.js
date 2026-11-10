@@ -1,5 +1,5 @@
 import { reactive, watch } from 'vue'
-import { PRODUCTS, PID, LEVELS, STAFF, START_MONEY, PACK, DAY_SECONDS, DECOR, EVENTS, WEATHER, EXPRESS_FEE, CAFE_ID, CAFE_MENU, SHELF_CAP, SHELF_CAP_BIG, CAREER_ID, careerNext, CONTRACTS, SHELF_BOOST, PASS, DOORMAT, RUMOR } from './config.js'
+import { PRODUCTS, PID, LEVELS, STAFF, START_MONEY, PACK, DAY_SECONDS, DECOR, EVENTS, WEATHER, EXPRESS_FEE, CAFE_ID, CAFE_MENU, SHELF_CAP, SHELF_CAP_BIG, CAREER_ID, careerNext, CONTRACTS, SHELF_BOOST, PASS, DOORMAT, RUMOR, canStockProduct } from './config.js'
 import { makePerson } from './people.js'
 import { basePlan, planArea, stockRoom, defaultRegister, defaultShelves, defaultFreezers, defaultProduce, produceSlots, defaultDecor, usableDecor, settleLayout } from './layout.js'
 
@@ -569,6 +569,13 @@ export function load() {
     }
     game.decorV2 = true
     if (!game.shelves.some((s) => s.fridge)) for (const f of freezers) addShelf({ ...f, fridge: true })
+    // saves de antes das regras de seção: prateleira vazia com produto que não vai mais nela fica livre; com itens, avisa para esvaziar
+    let misplaced = 0
+    for (const s of game.shelves) {
+      if (!s.product || s.x < 0 || canStockProduct(s.product, s)) continue
+      if (s.count === 0) { s.product = null; s.price = null } else misplaced++
+    }
+    if (misplaced) toast(`${misplaced === 1 ? '1 prateleira guarda' : `${misplaced} prateleiras guardam`} produto que agora vai em outro móvel: esvazie para o repositor voltar a repor`, 'bad')
     settle()
     ui.cart = cart || {}
     ui.log = (log || []).map((m) => ({ ...m, id: uid() }))

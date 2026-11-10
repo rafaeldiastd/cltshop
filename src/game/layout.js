@@ -199,16 +199,33 @@ export function boxSlots(boxes, plan) {
   const spots = []
   for (let z = 0; z < room.rows; z++) for (let x = 0; x < room.cols; x++) if (x !== room.door.x || z !== room.door.z) spots.push({ x, z })
   const out = new Map()
-  let iDock = 0, iRoom = 0
+  let iDock = 0
+  const inRoom = []
   for (const b of boxes) {
     if (b.at) out.set(b.id, { x: b.at.x, y: 0, z: b.at.z }) // solta no chão pelo jogador
     else if (b.state === 'dock') {
       const i = iDock++
       out.set(b.id, { x: d.doorX - 1.4 - (i % 4) * 0.75, y: Math.floor(i / 8) * 0.42, z: d.rows + 1.0 + (Math.floor(i / 4) % 2) * 0.75 })
-    } else {
-      const i = iRoom++, s = spots[i % spots.length]
-      out.set(b.id, { x: s.x, y: Math.floor(i / spots.length) * 0.42, z: s.z })
-    }
+    } else inRoom.push(b)
   }
+  // estoque: cada coluna junta caixas do mesmo produto (pão com pão, tomate com tomate)
+  const byProduct = new Map()
+  for (const b of inRoom) { if (!byProduct.has(b.product)) byProduct.set(b.product, []); byProduct.get(b.product).push(b) }
+  const H = Math.max(STACK, Math.ceil(inRoom.length / spots.length))
+  const full = [], rest = []
+  for (const list of byProduct.values()) {
+    let i = 0
+    for (; i + H <= list.length; i += H) full.push(list.slice(i, i + H))
+    if (i < list.length) rest.push(list.slice(i))
+  }
+  let cols = [...full, ...rest]
+  // não cabe uma coluna por produto: junta as sobras (do mesmo produto, lado a lado) e, no limite, mistura
+  if (cols.length > spots.length) {
+    cols = [...full]
+    const flat = rest.flat()
+    for (let i = 0; i < flat.length; i += H) cols.push(flat.slice(i, i + H))
+  }
+  if (cols.length > spots.length) { cols = []; for (let i = 0; i < inRoom.length; i++) { (cols[i % spots.length] ||= []).push(inRoom[i]) } }
+  cols.forEach((col, ci) => col.forEach((b, k) => out.set(b.id, { x: spots[ci].x, y: k * 0.42, z: spots[ci].z })))
   return out
 }

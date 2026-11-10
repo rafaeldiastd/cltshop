@@ -1,6 +1,6 @@
 import { game, ui, hooks, toast, newStats, uid, wages, save, stockFull, money, settings, costOf, refOf, demandOf, rollMarket, cafePrice, cafeCost, cafeRef, customersPerDay, maxCustomers, shelfCap, hasPerk, gainXp, cafeMenu, productPrice, clockText } from './state.js'
 import { PRODUCTS, PID, DAY_SECONDS, PACK, MOODS, PETS, CAMERA_STOP_CHANCE, CAFE, LUNCH, SHELF_BOOST, FENG_SHUI, ARCADE, NIGHT_LIGHTS, DELIVERY, PET, TEAM, FREEZER, TECH, DIRT, DOORMAT, DECOR, canStockProduct } from './config.js'
-import { onDuty, isOff, walkMult, workMult, serveMult, gainMemberXp, restTeam, teamMorning, ensureCandidates } from './team.js'
+import { onDuty, isOff, walkMult, workMult, serveMult, skillSpeed, energyDrain, gainMemberXp, restTeam, teamMorning, ensureCandidates } from './team.js'
 import { makeGoals, checkGoals } from './goals.js'
 import { dims, cashierTile, queueTiles, doorTile, doorInside, shelfAccess, shelfPoint, stockStand, stockRoom, inStock, boxSlots, isUsable } from './layout.js'
 import { sfx } from './audio.js'
@@ -1008,7 +1008,8 @@ class World {
       const m = a.member
       if (!m) continue
       const busy = !a.idle || a.serving || (a.role === 'barista' && cafeBusy)
-      const drain = (busy ? TEAM.drainBusy : TEAM.drainIdle) * (m.gear ? 0.6 : 1)
+      const drain = (busy ? TEAM.drainBusy : TEAM.drainIdle) * (m.gear ? 0.6 : 1) * energyDrain(m)
+      if (busy) m.work = (m.work || 0) + t // segundos ocupado hoje: vira a carga de trabalho
       m.energy = Math.max(0, Math.min(100, m.energy - drain * t + (pet ? TEAM.petRest * t : 0)))
     }
   }
@@ -1061,7 +1062,7 @@ class World {
       if (readyOrder && !readyOrder.delivering) {
         readyOrder.delivering = true
         readyOrder.state = 'delivering'
-        const dur = rnd(DELIVERY.ride[0], DELIVERY.ride[1]) / walkMult(m)
+        const dur = rnd(DELIVERY.ride[0], DELIVERY.ride[1]) / (skillSpeed(m) * (m.energy < 30 ? 0.8 : 1)) // entrega mais rápido com competência
         a.say('🛵', dur)
         return a.setSteps([
           go(this.d.cols + 6, this.d.rows + 1.2),
@@ -1082,8 +1083,9 @@ class World {
       if (Math.hypot(a.x - c.x, a.z - c.z) > 0.2) a.setSteps([go(c.x, c.z)])
       return
     }
-    const M = workMult(m) / this.petBoost
-    if (a.role === 'cleaner') return this.cleanerAI(a, M)
+    const Mw = workMult(m) / this.petBoost // fator de duração das tarefas: competência 3 = 1, 5 = metade do tempo, 1 = o dobro
+    if (a.role === 'cleaner') return this.cleanerAI(a, Mw)
+    const M = Mw * 1.35 // tempo de referência do repositor
     // cada tarefa concluída rende experiência para o funcionário
     const xp = (steps) => [...steps, call(() => gainMemberXp(m, 1))]
     // repositor: se houver pedido de delivery aguardando separação, ele separa se houver estoque
@@ -1118,15 +1120,32 @@ class World {
     }
     // caixa que o jogador soltou é dele; a que ele encheu só entra se o produto acabar
     const free = (b, s) => !b.res && !b.at && b.id !== ui.selectedBox && (!b.keep || s.count === 0)
-    // primeiro o que está mais vazio: procura o produto aberto, depois fechado, depois na calçada
-    for (const s of game.shelves.filter((x) => x.product && x.count < shelfCap()).sort((x, y) => x.count - y.count)) {
-      const find = (state) => game.boxes.find((b) => b.state === state && b.product === s.product && free(b, s))
-      const open = find('open')
-      if (open) { open.res = a.id; return a.setSteps(xp(this.shelve(open, s, M, a))) }
-      const closed = find('stock')
-      if (closed) { closed.res = a.id; return a.setSteps(xp(this.unpack(closed, M, a))) }
-      const onDock = !stockFull() && find('dock')
-      if (onDock) { onDock.res = a.id; return a.setSteps(xp(this.receive(onDock, M, a))) }
+    // primeiro o que está mais vazio. Só prateleiras onde o produto cabe: uma com produto incompatível (ou freezer quebrado) não trava as outras
+    const pickJob = () => {
+      for (const s of game.shelves.filter((x) => x.product && x.count < shelfCap() && !x.broken && canStockProduct(x.product, x)).sort((x, y) => x.count - y.count)) {
+        const find = (state) => game.boxes.find((b) => b.state === state && b.product === s.product && free(b, s))
+        const open = find('open'); if (open) return { kind: 'shelve', box: open, shelf: s }
+        const closed = find('stock'); if (closed) return { kind: 'unpack', box: closed }
+        const onDock = !stockFull() && find('dock'); if (onDock) return { kind: 'receive', box: onDock }
+      }
+      return null
+    }
+    // fila de tarefas: o sistema sorteia UM repositor livre para a tarefa e só ele vai; se ninguém está livre, a tarefa espera na fila até alguém ficar livre
+    const job = pickJob()
+    if (!job) this.restockOwner = null
+    else {
+      const owner = this.restockOwner && this.staff.find((s) => s.id === this.restockOwner)
+      if (!owner || owner.role !== 'stocker') {
+        const livres = this.staff.filter((s) => s.role === 'stocker' && s.idle && !s.serving)
+        const sorteado = livres[Math.floor(Math.random() * livres.length)]
+        this.restockOwner = sorteado ? sorteado.id : null
+      }
+      if (this.restockOwner !== a.id) return // não foi o sorteado: espera
+      const st = stockStand(game.plan)
+      if (job.kind !== 'receive' && Math.hypot(a.x - st.x, a.z - st.z) > 0.6) return a.setSteps([go(st.x, st.z)])
+      job.box.res = a.id
+      this.restockOwner = null
+      return a.setSteps(xp(job.kind === 'shelve' ? this.shelve(job.box, job.shelf, M, a) : job.kind === 'unpack' ? this.unpack(job.box, M, a) : this.receive(job.box, M, a)))
     }
     // sem urgência: cuida do resto da entrega
     const dock = !stockFull() && game.boxes.find((b) => b.state === 'dock' && !b.res)
