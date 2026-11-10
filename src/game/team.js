@@ -1,6 +1,6 @@
 // Equipe: contratação pelo catálogo de candidatos, níveis, energia, satisfação e pedidos dos funcionários.
 import { game, toast, money } from './state.js'
-import { STAFF, TEAM, REQUESTS, levelXp } from './config.js'
+import { STAFF, TEAM, REQUESTS, levelXp, SKILL_SPEED, WALK_SPEED, DAY_SECONDS } from './config.js'
 import { makePerson, fairWage, roleName } from './people.js'
 
 export { roleName, fairWage }
@@ -16,12 +16,35 @@ export const underpaid = (m) => m.wage < fairWage(m.role, m.skill, m.speed) * 0.
 
 // ---------- desempenho ----------
 export const isTired = (m) => m.energy < TEAM.tired
-// multiplica a velocidade de andar: velocidade 3 ≈ 1,05×; cansado anda mais devagar
-export const walkMult = (m) => (0.75 + 0.1 * m.speed) * (isTired(m) ? 0.75 : 1)
-// multiplica a duração das tarefas (menor = mais rápido): competência 3 ≈ 1,25×
-export const workMult = (m) => (1.55 - 0.1 * m.skill) * (isTired(m) ? 1.3 : 1) * (m.morale < 35 ? 1.1 : 1)
+const at = (list, n) => list[Math.max(1, Math.min(5, n)) - 1]
+// competência: -50%, -25%, 0%, +25% ou +50% de velocidade em todas as tarefas
+export const skillSpeed = (m) => at(SKILL_SPEED, m.skill)
+// velocidade: quão rápido anda; cansado anda mais devagar
+export const walkMult = (m) => at(WALK_SPEED, m.speed) * (isTired(m) ? 0.75 : 1)
+// multiplica a duração das tarefas (menor = mais rápido): cansado ou desanimado rende menos
+export const workMult = (m) => (1 / skillSpeed(m)) * (isTired(m) ? 1.3 : 1) * (m.morale < 35 ? 1.1 : 1)
 // ritmo do caixa: competência 3 = ritmo de referência
-export const serveMult = (m) => (0.7 + 0.1 * m.skill) * (isTired(m) ? 0.8 : 1)
+export const serveMult = (m) => skillSpeed(m) * (isTired(m) ? 0.8 : 1) * (m.morale < 35 ? 0.9 : 1)
+// quanta energia gasta: quem anda rápido e é pouco competente cansa depressa; rápido e muito competente gasta pouco
+export const energyDrain = (m) => (0.7 + 0.15 * m.speed) * (1.5 - 0.2 * m.skill)
+export const pctText = (f) => (f >= 1 ? '+' : '') + Math.round((f - 1) * 100) + '%'
+
+// ---------- carga de trabalho x salário ----------
+// carga = parte do expediente que a pessoa passou ocupada; o salário esperado cresce com a carga (de 60% do justo, sem fazer nada, a 140% com o dia todo ocupado)
+export const workLoad = (m) => Math.min(1.3, (m.work || 0) / DAY_SECONDS)
+export const expectedWage = (m, load = m.lastLoad ?? 0.5) => fairWage(m.role, m.skill, m.speed) * (0.6 + 0.8 * load)
+// 1 = equilibrado; abaixo de 0,92 a pessoa se sente sobrecarregada para o que ganha
+export const wageScore = (m) => (m.lastLoad == null ? 1 : m.wage / expectedWage(m))
+export const overloaded = (m) => m.lastLoad != null && wageScore(m) < 0.92
+export const raiseCost = (m) => Math.max(3, Math.round(Math.max(m.wage, fairWage(m.role, m.skill, m.speed)) * 0.12)) // +12% do salário (ou do justo, se ganhar menos)
+export function giveRaise(id) {
+  const m = memberById(id)
+  if (!m) return
+  m.wage += raiseCost(m)
+  m.morale = clamp(m.morale + 10)
+  if (m.request?.type === 'raise' && m.wage >= m.request.wage) m.request = null // o aumento já atende o pedido
+  toast(`${m.name} ganhou aumento: ${money(m.wage)}/dia`, 'good')
+}
 
 export function gainMemberXp(m, n = 1) {
   if (!m) return
@@ -144,10 +167,14 @@ export function restTeam(amount) {
 export function teamMorning() {
   const notes = []
   for (const m of [...game.team]) {
-    // dia puxado e salário abaixo do justo pesam na satisfação; o resto volta devagar ao normal
-    if (m.energy < 20) m.morale -= 5
-    if (underpaid(m)) m.morale -= 4
-    m.morale = clamp(m.morale + (m.morale < 60 ? 3 : m.morale > 75 ? -1 : 0))
+    // satisfação: puxada para o equilíbrio entre o quanto trabalhou e o quanto ganha (cada 10% de diferença vale 14 pontos)
+    m.lastLoad = workLoad(m)
+    const score = m.wage / expectedWage(m, m.lastLoad)
+    m.lastScore = score
+    let target = clamp(65 + 140 * (score - 1))
+    if (m.energy < 20) target -= 10 // dia que terminou exausto pesa
+    m.morale = clamp(m.morale + (target - m.morale) * 0.4)
+    m.work = 0
     m.energy = 100
     // pedido sem resposta por muito tempo conta como recusa, com metade do peso
     if (m.request && game.day - m.request.day >= TEAM.requestDays) {
@@ -162,10 +189,16 @@ export function teamMorning() {
     }
     if (isOff(m)) notes.push(`${m.name} está de folga hoje`)
   }
+  // sobrecarregado pede aumento (o valor que equilibraria a conta)
+  for (const m of game.team) {
+    if (m.request || !overloaded(m) || Math.random() > 0.8) continue
+    m.request = { type: 'raise', day: game.day, wage: Math.max(m.wage + 3, Math.ceil(expectedWage(m))) }
+    notes.push(`${m.name} está sobrecarregad${m.g === 'f' ? 'a' : 'o'} e pede aumento`)
+  }
   const open = () => pendingRequests().length
   for (const m of game.team) {
     if (open() >= TEAM.maxRequests || m.request) continue
-    if (Math.random() > TEAM.requestChance + (underpaid(m) ? 0.25 : 0)) continue
+    if (Math.random() > TEAM.requestChance) continue
     m.request = makeRequest(m)
     if (m.request) notes.push(`${m.name} tem um pedido para você na Equipe do computador`)
   }

@@ -337,7 +337,10 @@ export class Renderer {
     for (const dx of [-0.5, 0.5]) doorG.add(box(0.14, 1.4, 0.34, trim, doorX + dx, 0.7, rows))
     this.addDoor(doorG, doorX - 0.43, rows, 'x', 0.86, 1.3, 0x6fb3a8, -1.7)
     const doorHit = box(1.2, 2.1, 0.5, trim, doorX, 1.05, rows); doorHit.visible = false; doorG.add(doorHit); doorG.userData.hit = doorHit
-    this.doorSign = sprite(tagTex('FECHADO', '#f4a09a'), 1.5, 0.47); this.doorSign.position.set(doorX, 1.75, rows); doorG.add(this.doorSign)
+    // plaquinha ao lado da porta: verde com a loja aberta, cinza fechada
+    this.doorSign = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.13), new THREE.MeshBasicMaterial({ map: tagTex('FECHADO', '#c7c2cc'), toneMapped: false }))
+    this.doorSign.position.set(doorX + 0.86, 1.0, rows + 0.17); doorG.add(this.doorSign)
+    doorG.add(box(0.46, 0.17, 0.02, 0x3b2f4a, doorX + 0.86, 1.0, rows + 0.155))
     g.add(doorG)
 
     // janelinha no fundo
@@ -814,7 +817,7 @@ export class Renderer {
     }
     if (this.doorSign && this.signKey !== game.phase) {
       this.signKey = game.phase
-      const [text, bg] = game.phase === 'open' ? ['ABERTO', '#b9e4c4'] : game.phase === 'closing' ? ['FECHANDO', '#f8dfa2'] : game.phase === 'lunch' ? ['ALMOÇO', '#f8dfa2'] : ['FECHADO', '#f4a09a']
+      const [text, bg] = game.phase === 'open' ? ['ABERTO', '#7fd6a8'] : game.phase === 'closing' ? ['FECHANDO', '#c7c2cc'] : game.phase === 'lunch' ? ['ALMOÇO', '#c7c2cc'] : ['FECHADO', '#c7c2cc']
       this.doorSign.material.map = tagTex(text, bg); this.doorSign.material.needsUpdate = true
     }
   }

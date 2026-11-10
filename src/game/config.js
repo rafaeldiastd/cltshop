@@ -309,6 +309,9 @@ export const TEAM = {
   requestChance: 0.14, maxRequests: 2, requestDays: 2,
   quitMorale: 20,
 }
+// competência = velocidade nas tarefas (limpar, entregar, atender, repor): o ponto 3 é o padrão; velocidade = quão rápido anda
+export const SKILL_SPEED = [0.5, 0.75, 1, 1.25, 1.5] // -50%, -25%, 0%, +25%, +50%
+export const WALK_SPEED = [0.8, 0.9, 1, 1.1, 1.2]
 export const levelXp = (level) => 20 + level * 12 // trabalho para o funcionário subir de nível
 export const NAMES = {
   f: ['Ana', 'Bia', 'Carla', 'Dani', 'Elaine', 'Fernanda', 'Gabi', 'Helena', 'Isabela', 'Joana', 'Karina', 'Lívia', 'Marta', 'Nathália', 'Patrícia', 'Rosa', 'Sueli', 'Tati', 'Vanessa', 'Yasmin'],
