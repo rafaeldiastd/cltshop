@@ -1,20 +1,35 @@
 <script setup>
 import { computed } from 'vue'
-import { PhArrowsOut, PhCoffee, PhForkKnife, PhHammer, PhMinus, PhPackage, PhPlus, PhReceipt, PhSnowflake, PhStack, PhStorefront, PhTrash, PhUsers, PhWrench } from '@phosphor-icons/vue'
-import { game, money, upgradeType, canExpand, maxCustomers, hire, fire, restartGame, wages, isClosed, stockCount, stockCap, cafePrice, maxShelves, maxFreezers, shelfCount, freezerCount, emptyCount, trashEmpties } from '../game/state.js'
-import { buyShelf, canBuyShelf, buyFreezer, canBuyFreezer, buyCafe, canBuyCafe, startEdit } from '../game/editor.js'
+import { PhArrowsOut, PhCoffee, PhForkKnife, PhHammer, PhPackage, PhSnowflake, PhStack, PhStorefront, PhTrash, PhUsers, PhWrench, PhToolbox, PhKnife, PhPlant } from '@phosphor-icons/vue'
+import { game, ui, money, upgradeType, canExpand, maxCustomers, restartGame, wages, isClosed, stockCount, stockCap, cafePrice, maxShelves, maxFreezers, maxMeat, maxProduce, shelfCount, freezerCount, meatCount, produceCount, emptyCount, trashEmpties, cafeMenu } from '../game/state.js'
+import { onDuty, pendingRequests } from '../game/team.js'
+import { world } from '../game/world.js'
+import { buyShelf, canBuyShelf, buyFreezer, canBuyFreezer, buyMeatStand, canBuyMeatStand, buyProduceStand, canBuyProduceStand, buyCafe, canBuyCafe, startEdit } from '../game/editor.js'
 import { startBuild, buildRate } from '../game/build.js'
 import { planArea } from '../game/layout.js'
-import { LEVELS, SHELF_PRICE, FREEZER_PRICE, STAFF, CAFE, CAFE_MENU } from '../game/config.js'
+import { LEVELS, SHELF_PRICE, FREEZER_PRICE, PRODUCE_PRICE, MEAT_PRICE, CAFE, FREEZER } from '../game/config.js'
 
-const STAFF_ICON = { cashier: PhReceipt, stocker: PhPackage, barista: PhCoffee }
 const next = () => LEVELS[game.level + 1]
 const type = computed(() => LEVELS[game.level])
-const team = computed(() => Object.entries(STAFF).filter(([role]) => role !== 'barista' || game.cafe))
+// freezers que pedem técnico: quebrados ou com o motor gasto, ainda sem chamado
+const needService = computed(() => game.shelves.filter((s) => s.fridge && !s.call && (s.broken || (s.wear || 0) >= FREEZER.warn)))
+const serviceTotal = computed(() => needService.value.reduce((n, s) => n + world.serviceCost(s), 0))
+const freezerNote = computed(() => {
+  const broken = game.shelves.filter((s) => s.fridge && s.broken).length
+  const called = game.shelves.filter((s) => s.fridge && s.call).length
+  const parts = []
+  if (broken) parts.push(`${broken} quebrado${broken > 1 ? 's' : ''}`)
+  if (needService.value.length - broken > 0) parts.push(`${needService.value.length - broken} pedindo revisão`)
+  if (called) parts.push(`técnico chamado para ${called}`)
+  return parts.join(' · ') || 'todos com o motor em dia'
+})
+const openTeam = () => { ui.computerApp = 'team' }
 const cafeNote = computed(() => {
   if (game.level < CAFE.minLevel) return `Libera ao virar ${LEVELS[CAFE.minLevel].name}`
-  if (game.cafe && !game.staff.barista) return 'Contrate um atendente para abrir'
-  return `${CAFE_MENU.map((m) => `${m.name} ${money(cafePrice(m.id))}`).join(' · ')}${game.cafe ? ' (clique no balcão para mudar os preços)' : ''}`
+  if (game.cafe && !onDuty('barista')) return 'Contrate um atendente para abrir'
+  const list = cafeMenu()
+  if (!list.length) return 'Nenhuma receita descoberta ainda (compre ingredientes no atacado)'
+  return `${list.map((m) => `${m.name} ${money(cafePrice(m.id))}`).join(' · ')}${game.cafe ? ' (clique no balcão para mudar os preços)' : ''}`
 })
 </script>
 
@@ -50,6 +65,26 @@ const cafeNote = computed(() => {
           <button class="btn good" :disabled="!canBuyFreezer()" @click="buyFreezer">Comprar · {{ money(FREEZER_PRICE) }}</button>
         </div>
         <div class="line">
+          <PhPlant class="ico" weight="duotone" />
+          <div class="col"><b>Banca de Hortifruti (Ilha Pirâmide 2×2): {{ produceCount() }}/{{ maxProduce() }}</b><span class="muted">ilha central mais alta no meio estilo pirâmide (4 produtos)</span></div>
+          <button class="btn good" :disabled="!canBuyProduceStand()" @click="buyProduceStand('island')">Comprar · {{ money(PRODUCE_PRICE) }}</button>
+        </div>
+        <div class="line">
+          <PhPlant class="ico" weight="duotone" />
+          <div class="col"><b>Expositor de Hortifruti (Parede 2×2): {{ produceCount() }}/{{ maxProduce() }}</b><span class="muted">estante alta de parede (2 em cima e 2 embaixo)</span></div>
+          <button class="btn good" :disabled="!canBuyProduceStand()" @click="buyProduceStand('wall')">Comprar · {{ money(PRODUCE_PRICE) }}</button>
+        </div>
+        <div class="line">
+          <PhKnife class="ico" weight="duotone" />
+          <div class="col"><b>Freezers verticais de carnes: {{ meatCount() }}/{{ maxMeat() }}</b><span class="muted">armário refrigerado alto com porta de vidro para carnes</span></div>
+          <button class="btn good" :disabled="!canBuyMeatStand()" @click="buyMeatStand">Comprar · {{ money(MEAT_PRICE) }}</button>
+        </div>
+        <div class="line">
+          <PhToolbox class="ico" weight="duotone" />
+          <div class="col"><b>Manutenção dos freezers</b><span class="muted">{{ freezerNote }}</span></div>
+          <button class="btn good" :disabled="!needService.length" @click="world.callTechAll()">Chamar técnico{{ needService.length ? ` · ${money(serviceTotal)}` : '' }}</button>
+        </div>
+        <div class="line">
           <PhForkKnife class="ico" weight="duotone" />
           <div class="col"><b>Pausa para almoço</b><span class="muted">Fecha às 12h e volta às 13h. Dá para mudar móveis e pedir com entrega expressa, mas clientes encontram a porta fechada.</span></div>
           <button class="btn" :class="{ good: game.lunchOn }" :aria-pressed="game.lunchOn" @click="game.lunchOn = !game.lunchOn">{{ game.lunchOn ? 'Ligada' : 'Desligada' }}</button>
@@ -67,15 +102,12 @@ const cafeNote = computed(() => {
         </div>
       </section>
 
-      <h3><PhUsers weight="duotone" /> Equipe <span class="muted">salários/dia: {{ money(wages()) }}</span></h3>
+      <h3><PhUsers weight="duotone" /> Equipe</h3>
       <section>
-        <div v-for="[role, s] in team" :key="role" class="line">
-          <component :is="STAFF_ICON[role]" class="ico" weight="duotone" />
-          <div class="col"><b>{{ s.name }} × {{ game.staff[role] }}</b><span class="muted">{{ s.desc }} {{ money(s.wage) }}/dia</span></div>
-          <div class="btns">
-            <button class="btn sm" :disabled="!game.staff[role]" :aria-label="`Demitir ${s.name}`" @click="fire(role)"><PhMinus weight="bold" /></button>
-            <button class="btn good" :disabled="game.staff[role] >= s.max || game.money < s.hire" @click="hire(role)"><PhPlus weight="bold" /> Contratar · {{ money(s.hire) }}</button>
-          </div>
+        <div class="line">
+          <PhUsers class="ico" weight="duotone" />
+          <div class="col"><b>{{ game.team.length }} {{ game.team.length === 1 ? 'pessoa' : 'pessoas' }} · {{ money(wages()) }}/dia</b><span class="muted">{{ pendingRequests().length ? `${pendingRequests().length} pedido(s) esperando resposta` : 'contrate pelo catálogo de candidatos' }}</span></div>
+          <button class="btn good" @click="openTeam">Abrir equipe</button>
         </div>
       </section>
     </div>
@@ -92,6 +124,5 @@ section { display: flex; flex-direction: column; gap: 6px; }
 .line { display: flex; align-items: center; gap: 12px; background: #fff; border-radius: 12px; padding: 8px 12px; }
 .ico { font-size: 26px; color: var(--plum2); }
 .col { flex: 1; display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
-.btns { display: flex; gap: 6px; }
 footer { display: flex; justify-content: flex-end; }
 </style>

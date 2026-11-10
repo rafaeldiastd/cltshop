@@ -119,6 +119,22 @@ export function makeNpc(staff, seed) {
   return { obj: skClone(c.scene), animations: c.animations }
 }
 
+// funcionário: visual escolhido pela pessoa contratada (g = 'f' ou 'm', look = letra do modelo)
+export const personUrl = (g, look) => `characters/character-${g === 'f' ? 'female' : 'male'}-${'abcdefg'[look] || 'a'}.glb`
+export function makePersonModel(g, look) {
+  const c = chars.find((x) => x.url === personUrl(g, look))
+  return c ? { obj: skClone(c.scene), animations: c.animations } : makeNpc(false, ((look || 0) + 0.5) / 7)
+}
+// técnico de refrigeração: o modelo de operário
+export function makeWorker() {
+  const c = chars.find((x) => /worker/.test(x.url))
+  return c ? { obj: skClone(c.scene), animations: c.animations } : makeNpc(true, 0.5)
+}
+export function personThumb(g, look) {
+  const i = chars.findIndex((x) => x.url === personUrl(g, look))
+  return i >= 0 ? characterThumbs()[i] : null
+}
+
 // miniaturas do seletor de personagem (geradas uma vez, em um contexto WebGL temporário)
 let thumbs = null
 export function characterThumbs(size = 112) {
@@ -159,6 +175,11 @@ function studio(size = 96) {
     },
     close() { r.dispose(); r.forceContextLoss() },
   }
+}
+// miniatura de um modelo montado na hora (um contexto WebGL temporário por imagem)
+export function snapshot(make, size = 112) {
+  const s = studio(size)
+  try { return s.shot(make()).url } finally { s.close() }
 }
 let products = null, decorShots = null
 function renderProducts() {

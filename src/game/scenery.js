@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import * as assets from './assets.js'
+import { makeMoto, makeBuilding, makeBench, makeBin, makeBikeRack, makeHydrant, makePlanter } from './props.js'
 
 // árvores, arbustos e pedras não se mexem: junta tudo que usa o mesmo material em uma malha só
 function mergeStatic(group) {
@@ -73,20 +74,50 @@ export class Scenery {
     const grass = new THREE.Mesh(new THREE.PlaneGeometry(90, 90), new THREE.MeshStandardMaterial({ map: grassT, roughness: 1 }))
     grass.rotation.x = -Math.PI / 2; grass.position.set(cx, -0.03, rows / 2); grass.receiveShadow = true; g.add(grass)
 
-    // calçada de pedras
-    const walkT = canvasTex(256, 128, (c, w, h) => {
-      c.fillStyle = '#dccfb8'; c.fillRect(0, 0, w, h)
-      for (let y = 0; y < 2; y++) for (let x = 0; x < 4; x++) { c.fillStyle = (x + y) % 2 ? '#d3c4aa' : '#e3d7c1'; c.fillRect(x * 64 + (y ? 32 : 0) % 64, y * 64, 62, 62) }
-      c.strokeStyle = 'rgba(100,80,60,.15)'; c.strokeRect(0, 0, w, h)
-    }, [(cols + 18) / 2, 1.3])
-    const side = new THREE.Mesh(new THREE.PlaneGeometry(cols + 18, 2.6), new THREE.MeshStandardMaterial({ map: walkT, roughness: 1 }))
-    side.rotation.x = -Math.PI / 2; side.position.set(cx, -0.005, rows + 1.2); side.receiveShadow = true; g.add(side)
-    const curb = new THREE.Mesh(new THREE.BoxGeometry(cols + 18, 0.1, 0.18), std(0xb9ab94)); curb.position.set(cx, 0.03, rows + 2.55); curb.receiveShadow = true; g.add(curb)
+    // vizinhos da quadra: prédios dos dois lados da loja, na mesma linha da fachada
+    const W = cols + 18
+    const neighbors = [
+      { x0: -13.4, x1: -5.4, zBack: rows - 8.5, zFront: rows - 0.3, h: 3.6, wall: 0xe9c9a0, roof: 0x8a6a5a, awning: '#6fb3a8', sign: 'PADARIA' },
+      { x0: cols + 4.6, x1: cols + 10.6, zBack: rows - 8.5, zFront: rows - 0.3, h: 2.9, wall: 0xcfe0d4, roof: 0x7a8a8f, awning: '#ef8a77', sign: 'FARMÁCIA' },
+    ]
+    const near = (x, z, m = 0.9) => neighbors.some((n) => x > n.x0 - m && x < n.x1 + m && z > n.zBack - m && z < n.zFront + m)
+    for (const n of neighbors) g.add(makeBuilding(n))
+
+    // calçada: lajes claras com juntas, faixa de pedras junto ao meio-fio e piso tátil até a porta
+    const slabT = canvasTex(512, 256, (c, w, h) => {
+      const tones = ['#e8e0cf', '#e1d8c6', '#e6decd', '#dfd6c3', '#eae2d2']
+      for (let y = 0; y < 2; y++) for (let x = 0; x < 4; x++) { c.fillStyle = tones[(x * 3 + y * 2) % 5]; c.fillRect(x * 128, y * 128, 128, 128) }
+      for (let i = 0; i < 500; i++) { c.fillStyle = 'rgba(120,100,80,' + Math.random() * 0.07 + ')'; c.fillRect(Math.random() * w, Math.random() * h, 2, 2) }
+      c.strokeStyle = 'rgba(110,95,75,.4)'; c.lineWidth = 3
+      for (let i = 0; i <= 4; i++) { c.beginPath(); c.moveTo(i * 128, 0); c.lineTo(i * 128, h); c.stroke() }
+      for (let j = 0; j <= 2; j++) { c.beginPath(); c.moveTo(0, j * 128); c.lineTo(w, j * 128); c.stroke() }
+    }, [W / 4, 0.975])
+    const side = new THREE.Mesh(new THREE.PlaneGeometry(W, 1.95), new THREE.MeshStandardMaterial({ map: slabT, roughness: 1 }))
+    side.rotation.x = -Math.PI / 2; side.position.set(cx, -0.005, rows + 0.875); side.receiveShadow = true; g.add(side)
+    const cobbleT = canvasTex(256, 128, (c, w, h) => {
+      c.fillStyle = '#9d9486'; c.fillRect(0, 0, w, h)
+      for (let y = 0; y < 4; y++) for (let x = 0; x < 8; x++) {
+        const k = 118 + ((x * 13 + y * 29) % 40)
+        c.fillStyle = 'rgb(' + k + ',' + (k - 6) + ',' + (k - 16) + ')'
+        c.beginPath(); c.roundRect(x * 32 + (y % 2) * 16 + 2, y * 32 + 2, 28, 28, 7); c.fill()
+      }
+    }, [W / 2, 0.6])
+    const cobble = new THREE.Mesh(new THREE.PlaneGeometry(W, 0.6), new THREE.MeshStandardMaterial({ map: cobbleT, roughness: 1 }))
+    cobble.rotation.x = -Math.PI / 2; cobble.position.set(cx, -0.003, rows + 2.3); cobble.receiveShadow = true; g.add(cobble)
+    const tactT = canvasTex(64, 128, (c, w, h) => {
+      c.fillStyle = '#e8c24a'; c.fillRect(0, 0, w, h)
+      c.fillStyle = 'rgba(120,80,0,.55)'
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 4; x++) { c.beginPath(); c.arc(8 + x * 16, 8 + y * 16, 3.2, 0, 7); c.fill() }
+    }, [1, 2])
+    const tact = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.9), new THREE.MeshStandardMaterial({ map: tactT, roughness: 1, polygonOffset: true, polygonOffsetFactor: -1 }))
+    tact.rotation.x = -Math.PI / 2; tact.position.set(doorX, -0.001, rows + 0.9); tact.receiveShadow = true; g.add(tact)
+    const curbMat = std(0xcfc6b4)
+    const curb = new THREE.Mesh(new THREE.BoxGeometry(W, 0.14, 0.22), curbMat); curb.position.set(cx, 0.04, rows + 2.7); curb.receiveShadow = true; curb.castShadow = true; g.add(curb)
 
     // rua com faixas
     const roadT = canvasTex(256, 256, (c, w, h) => {
       c.fillStyle = '#4b4863'; c.fillRect(0, 0, w, h)
-      for (let i = 0; i < 400; i++) { c.fillStyle = `rgba(255,255,255,${Math.random() * 0.04})`; c.fillRect(Math.random() * w, Math.random() * h, 3, 3) }
+      for (let i = 0; i < 400; i++) { c.fillStyle = 'rgba(255,255,255,' + Math.random() * 0.04 + ')'; c.fillRect(Math.random() * w, Math.random() * h, 3, 3) }
     }, [14, 2])
     const road = new THREE.Mesh(new THREE.PlaneGeometry(cols + 40, 8), new THREE.MeshStandardMaterial({ map: roadT, roughness: 1 }))
     road.rotation.x = -Math.PI / 2; road.position.set(cx, -0.012, rows + 6.6); road.receiveShadow = true; g.add(road)
@@ -96,15 +127,45 @@ export class Scenery {
       dash.rotation.x = -Math.PI / 2; dash.position.set(i + 0.5, -0.005, rows + 6.6); g.add(dash)
     }
     this.laneZ = [rows + 5.3, rows + 7.9]
-
-    // caminho de pedras até a porta
-    for (let i = 0; i < 3; i++) {
-      const st = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.36, 0.04, 10), std(0xcfc3ad)); st.position.set(doorX + (i - 1) * 0.0, 0.0, rows + 0.1); st.visible = false; g.add(st)
+    // linhas contínuas de borda, faixa de pedestres e linha de retenção
+    for (const z of [rows + 3.05, rows + 10.15]) {
+      const edge = new THREE.Mesh(new THREE.PlaneGeometry(cols + 40, 0.09), dashMat); edge.rotation.x = -Math.PI / 2; edge.position.set(cx, -0.006, z); g.add(edge)
     }
+    const zebraX = doorX - 9.5
+    for (let i = 0; i < 8; i++) {
+      const z1 = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 6.7), dashMat); z1.rotation.x = -Math.PI / 2; z1.position.set(zebraX + i * 0.95, -0.006, rows + 6.6); g.add(z1)
+    }
+    for (const z of [rows + 3.5, rows + 9.7]) {
+      const stop = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 2), dashMat); stop.rotation.x = -Math.PI / 2; stop.rotation.z = Math.PI / 2; stop.position.set(zebraX - 0.6, -0.006, z)
+      stop.scale.set(1, 1, 1); g.add(stop)
+    }
+    const manhole = new THREE.Mesh(new THREE.CircleGeometry(0.32, 18), new THREE.MeshStandardMaterial({ color: 0x3b3850, roughness: 0.8 })); manhole.rotation.x = -Math.PI / 2; manhole.position.set(cx + 4, -0.004, rows + 5.3); g.add(manhole)
+    // calçada do outro lado da rua, com meio-fio e mureta baixa
+    const far = new THREE.Mesh(new THREE.PlaneGeometry(W + 22, 2.4), new THREE.MeshStandardMaterial({ map: slabT, roughness: 1 }))
+    far.rotation.x = -Math.PI / 2; far.position.set(cx, -0.005, rows + 11.9); far.receiveShadow = true; g.add(far)
+    const farCurb = new THREE.Mesh(new THREE.BoxGeometry(W + 22, 0.14, 0.22), curbMat); farCurb.position.set(cx, 0.04, rows + 10.55); farCurb.receiveShadow = true; g.add(farCurb)
+    const wallLow = new THREE.Mesh(new THREE.BoxGeometry(W + 22, 0.5, 0.25), std(0xd9b48a)); wallLow.position.set(cx, 0.25, rows + 13.3); wallLow.castShadow = true; wallLow.receiveShadow = true; g.add(wallLow)
+
+    // mobiliário de rua
+    const prop = (o, x, z, ry = 0) => { o.position.set(x, 0, z); o.rotation.y = ry; shadowAll(o); g.add(o); return o }
+    prop(makeBench(), doorX - 7.2, rows + 2.0, Math.PI)
+    prop(makeBin(), doorX + 5.6, rows + 2.0)
+    prop(makeBikeRack(), doorX - 5.6, rows + 2.0)
+    prop(makeHydrant(), doorX + 7.4, rows + 2.1)
+    prop(makePlanter(), doorX + 5.2, rows + 0.4)
+    prop(makePlanter(0x6fa96b), doorX - 3.9, rows + 0.4)
+
+    // moto do motoboy estacionada na calçada (o motoboy sai dali para as entregas)
+    const motoG = makeMoto()
+    motoG.position.set(doorX + 3.6, 0, rows + 1.2)
+    motoG.rotation.y = -Math.PI / 2
+    motoG.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
+    g.add(motoG)
 
     // árvores
     const trees = [[-4.5, -1], [-6, 3.5], [-3.6, rows - 0.5], [cols + 3.5, 0], [cols + 5, 4], [cols + 3.2, rows - 1], [cx - 5, -4], [cx + 4, -4.5], [1, -5.5], [cols, -6], [-8, rows + 1.6], [cols + 7, rows + 1.6], [cx - 9, -2], [cx + 9, -2]]
     trees.forEach(([x, z], i) => {
+      if (near(x, z)) return
       const t = assets.make('tree' + (i % 3))
       if (t) this.place(t, x, z, rnd(0.85, 1.15))
       else {
@@ -116,6 +177,7 @@ export class Scenery {
     // arbustos e flores
     const bushes = [[-1.7, 0.6], [-1.7, 3.2], [-1.7, rows - 1], [cols + 0.55, 0.5], [cols + 0.6, 3], [cols + 0.6, rows - 2], [doorX - 4.6, rows + 2.3], [doorX + 4.4, rows + 2.3], [-5, rows + 2.3], [cols + 4, rows + 2.3]]
     bushes.forEach(([x, z], i) => {
+      if (near(x, z)) return
       const b = assets.make('bush' + (i % 2))
       if (b) this.place(b, x, z, rnd(0.8, 1.1))
       else { const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45, 1), std(0x5f9f62)); m.position.set(x, 0.35, z); m.castShadow = true; g.add(m) }
@@ -123,6 +185,7 @@ export class Scenery {
     for (let i = 0; i < 26; i++) {
       const x = rnd(-9, cols + 9), z = rnd(-7, rows - 1)
       if (x > -1.2 && x < cols + 0.2 && z > -1 && z < rows + 0.5) continue
+      if (near(x, z)) continue
       const k = Math.random()
       const o = assets.make(k < 0.4 ? 'flower0' : k < 0.7 ? 'flower1' : k < 0.85 ? 'grass' : 'rock')
       if (o) this.place(o, x, z, rnd(0.8, 1.3))

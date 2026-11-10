@@ -1,7 +1,8 @@
 <script setup>
 import { computed } from 'vue'
-import { PhCloudSun, PhList, PhPause, PhPlay, PhSnowflake, PhStar, PhSun } from '@phosphor-icons/vue'
-import { game, ui, money, clockText } from '../game/state.js'
+import { PhCloudSun, PhList, PhPause, PhPlay, PhSnowflake, PhStar, PhSun, PhTicket } from '@phosphor-icons/vue'
+import { game, ui, money, clockText, xpNext, passPending } from '../game/state.js'
+import GoalsCard from './GoalsCard.vue'
 import { DAY_SECONDS, WEATHER } from '../game/config.js'
 
 const WEATHER_ICON = { hot: PhSun, mild: PhCloudSun, cold: PhSnowflake }
@@ -11,6 +12,8 @@ const clock = computed(() => clockText())
 const pct = computed(() => (game.phase === 'open' || game.phase === 'lunch' ? Math.round((game.clock / DAY_SECONDS) * 400) / 4 : game.phase === 'prep' ? 0 : 100))
 const label = { prep: 'Preparação', open: 'Aberta', lunch: 'Almoço', closing: 'Fechando', night: 'Noite' }
 const stars = computed(() => Math.round(game.rep))
+const xpPct = computed(() => Math.round(Math.min(1, game.career.xp / xpNext()) * 100))
+const openPass = () => { ui.computerApp = 'pass'; ui.modal = 'computer' }
 </script>
 
 <template>
@@ -26,6 +29,12 @@ const stars = computed(() => Math.round(game.rep))
       <PhStar v-for="n in 5" :key="n" :weight="n <= stars ? 'fill' : 'regular'" />
     </div>
     <div class="card pill" title="Clima: muda a procura por gelados"><component :is="WEATHER_ICON[game.weather]" weight="duotone" /> {{ WEATHER[game.weather].name }}</div>
+    <button class="card pill lvl" :class="{ ready: passPending() }" :title="`Nível ${game.career.earned}: ${game.career.xp}/${xpNext()} XP${passPending() ? ' · recompensa do passe para resgatar' : ''}`" @click="openPass">
+      <PhTicket weight="duotone" /> <b>Nv {{ game.career.earned }}</b>
+      <span class="xpbar"><i :style="{ width: xpPct + '%' }" /></span>
+      <i v-if="passPending()" class="dot" />
+    </button>
+    <GoalsCard />
     <div class="spacer" />
     <div v-if="game.phase === 'open' || game.phase === 'closing'" class="card pill speed">
       <button class="btn sm" :class="{ primary: game.paused }" :title="game.paused ? 'Continuar' : 'Pausar'" @click="game.paused = !game.paused"><PhPlay v-if="game.paused" weight="fill" /><PhPause v-else weight="fill" /></button>
@@ -45,4 +54,9 @@ const stars = computed(() => Math.round(game.rep))
 .stars { color: #e6a21f; gap: 2px; font-size: 1.05em; }
 .spacer { flex: 1; }
 .speed { padding: 4px 6px; gap: 4px; }
+.lvl { position: relative; font: inherit; color: inherit; cursor: pointer; gap: 6px; }
+.lvl:hover { box-shadow: inset 0 0 0 2px var(--teal), var(--shadow); }
+.xpbar { width: 54px; height: 6px; border-radius: 99px; background: var(--cream2); overflow: hidden; }
+.xpbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), var(--mustard)); }
+.dot { position: absolute; top: -3px; right: -3px; width: 12px; height: 12px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 0 2px #fff; }
 </style>

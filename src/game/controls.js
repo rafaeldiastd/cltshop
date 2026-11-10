@@ -18,7 +18,8 @@ export function onClick(hit) {
   else if (hit.kind === 'shelf') { const s = shelfOf(hit.id); s && world.cmdShelf(s) }
   else if (hit.kind === 'counter') { if (game.phase === 'open' || game.phase === 'closing') world.cmdServe(); else startEdit() }
   else if (hit.kind === 'door') world.cmdDoor()
-  else if (hit.kind === 'pet') world.cmdPet()
+  else if (hit.kind === 'pet') world.openPetMenu()
+  else if (hit.kind === 'dirt') world.cmdClean(game.dirt.find((d) => d.id === hit.id))
   else if (hit.kind === 'cafe') world.openCafePanel()
   else if (hit.kind === 'decor') { const d = game.decor.find((x) => x.id === hit.id); d && world.cmdUse(d) }
   else if (hit.kind === 'floor') { ui.panelShelf = null; ui.panelCafe = false; world.cmdMove(hit.x, hit.z) }
