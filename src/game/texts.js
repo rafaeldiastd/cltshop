@@ -10,6 +10,7 @@ export function hoverText(hit) {
     if (ui.held) return ui.held.why || null
     if (hit.kind === 'shelf') return shelfOf(hit.id)?.fridge ? 'Mover freezer' : 'Mover prateleira'
     if (hit.kind === 'counter') return 'Mover caixa'
+    if (hit.kind === 'cafe') return 'Mover cafeteria'
     if (hit.kind === 'decor') { const d = game.decor.find((x) => x.id === hit.id); return d ? `Mover ${DECOR[d.type].name}` : null }
     return null
   }
@@ -29,7 +30,8 @@ export function hoverText(hit) {
   }
   if (hit.kind === 'counter') return game.phase === 'open' || game.phase === 'closing' ? 'Atender no caixa' : 'Mudar layout da loja'
   if (hit.kind === 'pet') return 'Fazer carinho'
-  if (hit.kind === 'door') return game.phase === 'prep' ? 'Abrir a loja' : game.phase === 'open' ? 'Loja aberta' : 'Loja fechada'
+  if (hit.kind === 'cafe') return 'Preços da cafeteria'
+  if (hit.kind === 'door') return game.phase === 'prep' ? 'Abrir a loja' : game.phase === 'lunch' ? 'Reabrir a loja (13h)' : game.phase === 'open' ? 'Loja aberta' : 'Loja fechada'
   if (hit.kind === 'decor') {
     const d = game.decor.find((x) => x.id === hit.id)
     return d?.type === 'computer' ? 'Usar o computador' : d?.type === 'radio' ? 'Mexer no rádio' : null

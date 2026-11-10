@@ -3,7 +3,10 @@ import { PhPaintBrush, PhPower, PhShoppingCart, PhStorefront } from '@phosphor-i
 import ProductsApp from './ProductsApp.vue'
 import StoreApp from './StoreApp.vue'
 import DecorApp from './DecorApp.vue'
+import { computed } from 'vue'
 import { game, ui, money, clockText } from '../game/state.js'
+
+const clock = computed(() => clockText())
 
 const APPS = [
   { id: 'products', label: 'Compras', icon: PhShoppingCart },
@@ -19,7 +22,7 @@ const close = () => (ui.modal = null)
       <div class="screen">
         <div class="os">
           <b>LojaOS</b>
-          <span class="muted-l">Dia {{ game.day }} · {{ clockText() }}</span>
+          <span class="muted-l">Dia {{ game.day }} · {{ clock }}</span>
           <b class="cash">{{ money(game.money) }}</b>
           <button class="off" title="Desligar o computador" @click="close"><PhPower weight="bold" /> Sair</button>
         </div>

@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { PhArchive, PhArrowClockwise, PhArrowLineDown, PhChartBar, PhCheck, PhMoonStars, PhPlus, PhSignOut, PhTrash, PhWrench } from '@phosphor-icons/vue'
+import { PhArchive, PhArrowClockwise, PhArrowLineDown, PhChartBar, PhCheck, PhDoorOpen, PhMoonStars, PhPlus, PhSignOut, PhTrash, PhWrench } from '@phosphor-icons/vue'
 import { game, ui, money, trashBox, storeBox, emptyCount } from '../game/state.js'
 import { world } from '../game/world.js'
 import { SHELF_PRICE, PID } from '../game/config.js'
@@ -15,7 +15,7 @@ const canTrash = computed(() => filled.value || emptyCount() > 1)
 </script>
 
 <template>
-  <div class="bottom">
+  <div v-if="!ui.build" class="bottom">
     <div v-if="ui.action" class="card prog">
       {{ ui.action.label }}…
       <div class="pb"><i :style="{ width: ui.action.p * 100 + '%' }" /></div>
@@ -53,6 +53,7 @@ const canTrash = computed(() => filled.value || emptyCount() > 1)
 
     <div v-else class="row">
       <button v-if="ui.atRegister" class="btn primary" @click="world.leaveRegister()"><PhSignOut weight="bold" /> Sair do caixa</button>
+      <button v-if="game.phase === 'lunch' && !ui.modal" class="btn primary big" @click="world.endLunch()"><PhDoorOpen weight="fill" /> Reabrir a loja (13h)</button>
       <button v-if="game.phase === 'open'" class="btn" @click="world.closeEarly()">Fechar mais cedo</button>
       <button v-if="game.phase === 'night' && !ui.modal" class="btn primary big" @click="next"><PhMoonStars weight="fill" /> Próximo dia</button>
       <button v-if="game.phase === 'night' && !ui.modal" class="btn" @click="ui.modal = 'summary'"><PhChartBar weight="bold" /> Resumo</button>

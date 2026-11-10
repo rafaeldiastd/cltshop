@@ -1,5 +1,5 @@
 <script setup>
-import { PhPaintBrush, PhPottedPlant, PhSecurityCamera } from '@phosphor-icons/vue'
+import { PhCoffee, PhPaintBrush, PhPottedPlant, PhSecurityCamera } from '@phosphor-icons/vue'
 import { money, isClosed, decorCount, sellDecor } from '../game/state.js'
 import { buyDecor, canBuyDecor, decorMaxed } from '../game/editor.js'
 import { decorThumb } from '../game/assets.js'
@@ -7,7 +7,7 @@ import { DECOR } from '../game/config.js'
 
 const items = Object.entries(DECOR).filter(([, d]) => d.price)
 const resale = (d) => Math.floor(d.price / 2)
-const ICON = { camera: PhSecurityCamera } // itens sem modelo 3D
+const ICON = { camera: PhSecurityCamera, cafeTable: PhCoffee } // itens sem modelo 3D
 </script>
 
 <template>

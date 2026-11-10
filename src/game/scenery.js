@@ -1,5 +1,27 @@
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import * as assets from './assets.js'
+
+// árvores, arbustos e pedras não se mexem: junta tudo que usa o mesmo material em uma malha só
+function mergeStatic(group) {
+  group.updateMatrixWorld(true)
+  const buckets = new Map()
+  group.traverse((o) => {
+    if (!o.isMesh || !o.visible || !o.geometry.index || o.material.transparent) return
+    const k = `${o.material.uuid}|${o.castShadow}|${Object.keys(o.geometry.attributes).sort().join()}`
+    if (!buckets.has(k)) buckets.set(k, [])
+    buckets.get(k).push(o)
+  })
+  for (const list of buckets.values()) {
+    if (list.length < 2) continue
+    const geo = mergeGeometries(list.map((m) => m.geometry.clone().applyMatrix4(m.matrixWorld)))
+    if (!geo) continue
+    const mesh = new THREE.Mesh(geo, list[0].material)
+    mesh.castShadow = list[0].castShadow; mesh.receiveShadow = true
+    list.forEach((m) => m.removeFromParent())
+    group.add(mesh)
+  }
+}
 
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0, ...o })
 const rnd = (a, b) => a + Math.random() * (b - a)
@@ -68,8 +90,9 @@ export class Scenery {
     }, [14, 2])
     const road = new THREE.Mesh(new THREE.PlaneGeometry(cols + 40, 8), new THREE.MeshStandardMaterial({ map: roadT, roughness: 1 }))
     road.rotation.x = -Math.PI / 2; road.position.set(cx, -0.012, rows + 6.6); road.receiveShadow = true; g.add(road)
+    const dashGeo = new THREE.PlaneGeometry(1.0, 0.1), dashMat = new THREE.MeshBasicMaterial({ color: 0xf2e6c4 })
     for (let i = -14; i < cols + 14; i += 2) {
-      const dash = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.1), new THREE.MeshBasicMaterial({ color: 0xf2e6c4 }))
+      const dash = new THREE.Mesh(dashGeo, dashMat)
       dash.rotation.x = -Math.PI / 2; dash.position.set(i + 0.5, -0.005, rows + 6.6); g.add(dash)
     }
     this.laneZ = [rows + 5.3, rows + 7.9]
@@ -132,6 +155,7 @@ export class Scenery {
     this.motes = new THREE.Points(mg, new THREE.PointsMaterial({ color: 0xfff0c8, size: 0.06, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }))
     g.add(this.motes)
 
+    mergeStatic(g)
     this.scene.add(g)
   }
 
@@ -140,7 +164,7 @@ export class Scenery {
     const k = Math.floor(Math.random() * 5)
     const car = new THREE.Group()
     const m = assets.make('car' + k)
-    if (m) { m.rotation.y = 0; car.add(m) }
+    if (m) { m.rotation.y = 0; m.traverse((o) => { o.castShadow = false }); car.add(m) }
     else {
       const b = new THREE.Mesh(new THREE.BoxGeometry(2, 0.5, 0.9), std([0xef8a77, 0x6fb3a8, 0xf2c25b, 0x8f8cff, 0xe8eef8][k])); b.position.y = 0.4; b.castShadow = true
       const c = new THREE.Mesh(new THREE.BoxGeometry(1, 0.4, 0.8), std(0xcfe7f0)); c.position.set(-0.1, 0.8, 0); car.add(b, c)

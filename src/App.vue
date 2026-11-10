@@ -15,6 +15,9 @@ import SummaryModal from './components/SummaryModal.vue'
 import ComputerScreen from './components/ComputerScreen.vue'
 import MenuModal from './components/MenuModal.vue'
 import ThiefAlert from './components/ThiefAlert.vue'
+import CafePanel from './components/CafePanel.vue'
+import BuildMode from './components/BuildMode.vue'
+import { stopBuild } from './game/build.js'
 import { PhCrosshair } from '@phosphor-icons/vue'
 import MusicPanel from './components/MusicPanel.vue'
 
@@ -56,10 +59,11 @@ onMounted(async () => {
   const typing = (e) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target?.tagName)
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (ui.build) { stopBuild(); return }
       if (ui.editing) { if (ui.held) cancelHeld(); else stopEdit(); return }
-      ui.selectedBox = null; ui.panelShelf = null; ui.modal = ui.modal === 'summary' ? ui.modal : null; return
+      ui.selectedBox = null; ui.panelShelf = null; ui.panelCafe = false; ui.modal = ui.modal === 'summary' ? ui.modal : null; return
     }
-    if (typing(e) || e.metaKey || e.ctrlKey) return
+    if (ui.build || typing(e) || e.metaKey || e.ctrlKey) return
     if (MAP[e.code]) { world.keys.add(MAP[e.code]); startMusic(); e.preventDefault(); return }
     if (e.code === 'KeyR' && ui.held && !e.repeat) { rotateHeld(); return }
     if (e.code === 'KeyE' && !e.repeat) {
@@ -67,7 +71,7 @@ onMounted(async () => {
       if (ui.modal) return
       if (!world.interact()) { const h = rend.hover; if (h && h.kind !== 'floor') onClick(h) }
     }
-    if (e.code === 'KeyQ') world.drop()
+    if (e.code === 'KeyQ' && !ui.modal) world.drop()
   })
   addEventListener('keyup', (e) => { if (MAP[e.code]) world.keys.delete(MAP[e.code]) })
   addEventListener('blur', () => world.keys.clear())
@@ -86,6 +90,8 @@ onBeforeUnmount(() => {
     <TopBar />
     <ToastStack />
     <ShelfPanel />
+    <CafePanel />
+    <BuildMode />
     <BottomBar />
     <MusicPanel />
     <ThiefAlert />

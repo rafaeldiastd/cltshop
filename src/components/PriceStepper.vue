@@ -1,23 +1,26 @@
 <script setup>
 import { computed } from 'vue'
 import { PhMinus, PhPlus } from '@phosphor-icons/vue'
-import { productPrice, setPrice, stepPrice, priceVerdict } from '../game/state.js'
+import { productPrice, setPrice, stepPrice, priceVerdict, cafePrice, setCafePrice, cafeVerdict } from '../game/state.js'
 
-const props = defineProps({ pid: String })
-const price = computed(() => productPrice(props.pid))
-const verdict = computed(() => priceVerdict(props.pid))
+// pid = produto comum; cafe = item do cardápio da cafeteria
+const props = defineProps({ pid: String, cafe: String })
+const price = computed(() => (props.cafe ? cafePrice(props.cafe) : productPrice(props.pid)))
+const verdict = computed(() => (props.cafe ? cafeVerdict(props.cafe) : priceVerdict(props.pid)))
+const set = (v) => (props.cafe ? setCafePrice(props.cafe, v) : setPrice(props.pid, v))
+const step = (d) => (props.cafe ? setCafePrice(props.cafe, price.value + d) : stepPrice(props.pid, d))
 const typed = (e) => {
   const v = parseFloat(String(e.target.value).replace(',', '.'))
-  if (Number.isFinite(v)) setPrice(props.pid, v)
+  if (Number.isFinite(v)) set(v)
   else e.target.value = price.value == null ? '' : price.value.toFixed(2)
 }
 </script>
 
 <template>
   <div class="ps">
-    <button class="btn sm" title="Diminuir R$ 0,10" aria-label="Diminuir preço" @click="stepPrice(pid, -0.1)"><PhMinus weight="bold" /></button>
+    <button class="btn sm" title="Diminuir R$ 0,10" aria-label="Diminuir preço" @click="step(-0.1)"><PhMinus weight="bold" /></button>
     <label class="field"><span>R$</span><input :value="price == null ? '' : price.toFixed(2)" inputmode="decimal" placeholder="—" :aria-label="'Preço'" @change="typed" /></label>
-    <button class="btn sm" title="Aumentar R$ 0,10" aria-label="Aumentar preço" @click="stepPrice(pid, 0.1)"><PhPlus weight="bold" /></button>
+    <button class="btn sm" title="Aumentar R$ 0,10" aria-label="Aumentar preço" @click="step(0.1)"><PhPlus weight="bold" /></button>
     <span class="chip" :class="verdict.cls">{{ verdict.text }}</span>
   </div>
 </template>
