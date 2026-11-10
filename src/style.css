@@ -18,3 +18,15 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; }
 .muted { opacity: .65; font-size: .85em; }
 svg { vertical-align: -.14em; flex: none; }
 .good-t { color: var(--good); } .bad-t { color: var(--bad); }
+
+/* etiquetas dos móveis e caixas: HTML sobre a cena, empilhadas quando se sobrepõem */
+.tag-layer { position: fixed; inset: 0; z-index: 5; pointer-events: none; overflow: hidden; }
+.tag-layer svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.tag { position: absolute; left: 0; top: 0; height: 22px; padding: 0 8px 0 6px; display: flex; align-items: center; gap: 4px; border-radius: 12px; font: 700 12px/1 system-ui, -apple-system, sans-serif; white-space: nowrap; pointer-events: auto; cursor: pointer; box-shadow: 0 1px 3px rgba(59, 47, 74, .25); will-change: transform; }
+.tag img { width: 16px; height: 16px; }
+.tag:hover, .tag.hl { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #3b2f4a; z-index: 2; }
+.tag-layer.pass .tag { pointer-events: none; }
+.tag-layer .tl { stroke: rgba(59, 47, 74, .55); stroke-width: 1.5; }
+.tag-layer .td { fill: rgba(59, 47, 74, .7); }
+.tag-layer .tl.on { stroke: #3b2f4a; stroke-width: 2.5; }
+.tag-layer .td.on { fill: #3b2f4a; }

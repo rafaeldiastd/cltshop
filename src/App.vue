@@ -6,7 +6,7 @@ import { loadAssets } from './game/assets.js'
 import { startMusic, setMusic, setSfx } from './game/audio.js'
 import { game, ui, settings, newGame, load, save } from './game/state.js'
 import { onClick, hoverText } from './game/controls.js'
-import { moveHeld, rotateHeld, cancelHeld, stopEdit } from './game/editor.js'
+import { moveHeld, rotateHeld, rotateAt, sellHeld, sellAt, deselectTool, stopEdit, toggleProduceStyle } from './game/editor.js'
 import TopBar from './components/TopBar.vue'
 import BottomBar from './components/BottomBar.vue'
 import ToastStack from './components/ToastStack.vue'
@@ -17,6 +17,7 @@ import MenuModal from './components/MenuModal.vue'
 import ThiefAlert from './components/ThiefAlert.vue'
 import CafePanel from './components/CafePanel.vue'
 import BuildMode from './components/BuildMode.vue'
+import PetModal from './components/PetModal.vue'
 import { stopBuild } from './game/build.js'
 import { PhCrosshair } from '@phosphor-icons/vue'
 import MusicPanel from './components/MusicPanel.vue'
@@ -60,12 +61,21 @@ onMounted(async () => {
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (ui.build) { stopBuild(); return }
-      if (ui.editing) { if (ui.held) cancelHeld(); else stopEdit(); return }
+      if (ui.editing) { if (ui.held || ui.buyTool) deselectTool(); else stopEdit(); return }
       ui.selectedBox = null; ui.panelShelf = null; ui.panelCafe = false; ui.modal = ui.modal === 'summary' ? ui.modal : null; return
     }
     if (ui.build || typing(e) || e.metaKey || e.ctrlKey) return
     if (MAP[e.code]) { world.keys.add(MAP[e.code]); startMusic(); e.preventDefault(); return }
-    if (e.code === 'KeyR' && ui.held && !e.repeat) { rotateHeld(); return }
+    if ((e.code === 'Delete' || e.code === 'Backspace') && ui.editing && !e.repeat) {
+      if (ui.held) sellHeld(); else sellAt(rend.hover)
+      e.preventDefault(); return
+    }
+    if (e.code === 'KeyR' && ui.editing && !e.repeat) {
+      const dir = e.shiftKey ? -1 : 1
+      if (ui.held) rotateHeld(dir); else rotateAt(rend.hover, dir)
+      return
+    }
+    if (e.code === 'KeyM' && (ui.held?.kind === 'produceGroup' || ui.held?.isNew) && !e.repeat) { toggleProduceStyle(); return }
     if (e.code === 'KeyE' && !e.repeat) {
       startMusic()
       if (ui.modal) return
@@ -95,6 +105,7 @@ onBeforeUnmount(() => {
     <BottomBar />
     <MusicPanel />
     <ThiefAlert />
+    <PetModal />
     <SummaryModal v-if="ui.modal === 'summary'" />
     <ComputerScreen v-if="ui.modal === 'computer'" />
     <MenuModal v-if="ui.modal === 'menu'" />

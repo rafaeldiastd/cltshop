@@ -4,12 +4,13 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { toRaw } from 'vue'
 import { game, ui, money, settings } from './state.js'
 import { world } from './world.js'
-import { PID, DAY_SECONDS } from './config.js'
-import { dims, boxSlots, stockRoom, onFloor, isUsable, backPartner, DIRS, planKey } from './layout.js'
+import { PID, DAY_SECONDS, FREEZER, DECOR } from './config.js'
+import { dims, boxSlots, stockRoom, onFloor, isUsable, backPartner, elbowOf, DIRS, planKey } from './layout.js'
 import { nextPlan } from './build.js'
 import * as assets from './assets.js'
+import { setThumbMaker } from './thumbs.js'
 import { Scenery } from './scenery.js'
-import { checkoutGuide } from './editor.js'
+import { checkoutGuide, produceSlots } from './editor.js'
 
 const C = { wood: 0xc9955c, woodDark: 0x9a6a3f, cream: 0xf6e7cf, plum: 0x3b2f4a, teal: 0x6fb3a8, coral: 0xef8a77, mustard: 0xf2c25b, cardboard: 0xc89a63 }
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0, ...o })
@@ -59,7 +60,23 @@ function addHit(gr, w, h, d, y = h / 2) {
 }
 const UP = new THREE.Vector3(0, 1, 0), ONE = new THREE.Vector3(1, 1, 1)
 const itemAt = (x, y, z, spin = 0) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(UP, spin), ONE)
+// meio disco (raio 0,25) para a ponta arredondada de uma bandeja; start = onde o meio disco começa (0 = lado +x, π = lado −x, −π/2 = lado +z)
+const roundCap = (g, x, y, z, start, color, h = 0.05) => {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, h, 14, 1, false, start, Math.PI), std(color)); m.position.set(x, y, z); g.add(m)
+}
+// ponta livre da bandeja: meio disco (rasa) ou retângulo com os dois cantos arredondados (funda, 0,75 de profundidade); sx = +1 direita, −1 esquerda
+const quarter = (g, x, y, z, start, color, h) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, h, 10, 1, false, start, Math.PI / 2), std(color)); m.position.set(x, y, z); g.add(m) }
+const trayEnd = (g, sx, y, color, h, deep) => {
+  if (!deep) return roundCap(g, sx * 0.25, y, 0, sx > 0 ? 0 : Math.PI, color, h)
+  g.add(box(0.25, h, 0.5, color, sx * 0.375, y, -0.25))
+  quarter(g, sx * 0.25, y, 0, sx > 0 ? 0 : (3 * Math.PI) / 2, color, h)
+}
+const post = (g, x, H, z) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, H, 8), std(C.woodDark)); m.position.set(x, H / 2, z); g.add(m) }
+const TAG_GAP = 2 // px entre etiquetas empilhadas
+const TAG_H = 22 // altura da etiqueta
+const SVG_NS = 'http://www.w3.org/2000/svg'
 const SHADOW_EVERY = 30 // quadros entre atualizações das sombras
+const STAFF_CAP = { cashier: '#f2c25b', barista: '#ef8a77', stocker: '#6fb3a8', courier: '#7fa6c9', cleaner: '#b58ad6' } // boné de cada cargo
 
 // ---------- sprites de texto/emoji ----------
 const texCache = new Map()
@@ -101,7 +118,6 @@ const sprite = (tex, sx, sy) => {
 }
 
 const lerp = (a, b, t) => a + (b - a) * t
-const BACK_SHIFT = 0.25 // metade da profundidade da prateleira
 const KEYS = [ // fração do dia -> cores
   { t: -1,  sky: 0xf7d9b5, sun: 0xffd9a8, si: 2.0, hi: 0.9, lamp: 0.6 },
   { t: 0,   sky: 0xf7d9b5, sun: 0xffd9a8, si: 2.0, hi: 0.9, lamp: 0.6 },
@@ -136,7 +152,7 @@ export class Renderer {
     this.scene.add(this.hemi, this.sun, this.sun.target)
     this.lamps = []
     this.scenery = new Scenery(this.scene)
-    this.shelfViews = new Map(); this.boxViews = new Map(); this.actorViews = new Map(); this.decorViews = new Map()
+    this.shelfViews = new Map(); this.boxViews = new Map(); this.actorViews = new Map(); this.decorViews = new Map(); this.dirtViews = new Map(); this.clocks = []; this.clockHM = [9, 0]
     this.doors = []
     this.editTiles = Array.from({ length: 8 }, () => {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(0.94, 0.94), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }))
@@ -144,6 +160,9 @@ export class Renderer {
       const label = sprite(tagTex('', '#fff'), 1.05, 0.33); label.visible = false; this.scene.add(label)
       label.material.depthTest = false; label.renderOrder = 10 // o nome aparece mesmo com gente ou móvel na frente
       m.userData.label = label
+      const arrow = new THREE.Mesh(new THREE.PlaneGeometry(0.78, 0.78), new THREE.MeshBasicMaterial({ map: this.arrowTex(), transparent: true, depthWrite: false, depthTest: false }))
+      arrow.rotation.order = 'YXZ'; arrow.rotation.x = -Math.PI / 2; arrow.renderOrder = 9; arrow.visible = false; this.scene.add(arrow)
+      m.userData.arrow = arrow
       return m
     })
     this.staticG = null; this.builtKey = ''; this.arrowKey = ''
@@ -165,6 +184,8 @@ export class Renderer {
 
     this.initOutline()
     this.initInput()
+    this.initTags()
+    setThumbMaker((key) => this.makeBuildModel(key))
     addEventListener('resize', () => this.resize())
     this.resize()
   }
@@ -318,7 +339,6 @@ export class Renderer {
     const doorHit = box(1.2, 2.1, 0.5, trim, doorX, 1.05, rows); doorHit.visible = false; doorG.add(doorHit); doorG.userData.hit = doorHit
     this.doorSign = sprite(tagTex('FECHADO', '#f4a09a'), 1.5, 0.47); this.doorSign.position.set(doorX, 1.75, rows); doorG.add(this.doorSign)
     g.add(doorG)
-    const mat = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.8), std(C.coral)); mat.rotation.x = -Math.PI / 2; mat.position.set(doorX, 0.012, rows - 0.2); g.add(mat)
 
     // janelinha no fundo
     const win = box(1.8, 1.0, 0.05, 0xbfe3ee, 3.3, 1.35, -0.48); win.material.emissive = new THREE.Color(0x3a6a7a); g.add(win)
@@ -350,6 +370,7 @@ export class Renderer {
       g.add(bulb, pl); this.lamps.push(pl)
     }
     this.decorate(g, cols, rows, doorX)
+    this.matKey = null
     bakeChildren(g)
     this.scenery.build({ cols, rows, doorX })
     this.scene.add(g)
@@ -361,19 +382,12 @@ export class Renderer {
     // lambri nas paredes
     g.add(box(cols + 0.4, 0.8, 0.24, 0xe3c4a0, cols / 2 - 0.5, 0.4, -0.6))
     g.add(box(0.24, 0.8, rows + 0.4, 0xe3c4a0, -0.6, 0.4, rows / 2 - 0.5))
-    // quadros e relógio
-    const frame = (x, w, h, col) => { g.add(box(w + 0.1, h + 0.1, 0.05, 0x7a5a3a, x, 1.5, -0.47)); g.add(box(w, h, 0.06, col, x, 1.5, -0.46)) }
-    frame(1.3, 0.55, 0.7, 0xf2b8a8); frame(5.5, 0.9, 0.55, 0xa8d4c8); if (cols > 9) frame(9.2, 0.55, 0.7, 0xf2d58a)
-    this.clock = sprite(this.clockTex(9, 0), 0.7, 0.7); this.clock.position.set(cols - 2, 1.75, -0.44); g.add(this.clock)
     // pendentes
     for (const l of this.lamps) {
       const cord = box(0.02, 0.5, 0.02, 0x3b2f4a, l.position.x, 2.45, l.position.z); const shade = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.22, 14, 1, true), new THREE.MeshStandardMaterial({ color: 0xef8a77, side: THREE.DoubleSide, roughness: 0.8 }))
       shade.position.set(l.position.x, 2.3, l.position.z); g.add(cord, shade)
     }
-    // cestas na entrada e vitrines externas
-    for (let i = 0; i < 2; i++) { const b = assets.make('basket'); if (b) { b.position.set(doorX - 1.0, i * 0.2, rows - 0.4); b.rotation.y = i; g.add(b) } }
-    const fl = assets.make('dFlowers'); if (fl) { fl.position.set(doorX + 1.9, 0, rows + 0.9); g.add(fl) }
-    const fr = assets.make('dFruit'); if (fr) { fr.position.set(doorX - 2.3, 0, rows + 0.7); g.add(fr) }
+    // vitrines externas (a loja começa sem cestas nem móveis de decoração)
   }
   // porta com dobradiça: abre sozinha quando alguém chega perto
   addDoor(parent, x, z, axis, w, h, color, open, who = () => true) {
@@ -397,38 +411,305 @@ export class Renderer {
   // ---------- objetos dinâmicos ----------
   makeShelfView(s) {
     const gr = new THREE.Group(); gr.userData = { kind: 'shelf', id: s.id }
-    gr.add(s.fridge ? this.makeFreezerModel() : baked('shelf', (g) => {
-      g.add(box(0.06, 1.05, 0.46, C.woodDark, -0.45, 0.525, 0)); g.add(box(0.06, 1.05, 0.46, C.woodDark, 0.45, 0.525, 0))
-      g.add(box(0.9, 1.05, 0.04, C.wood, 0, 0.525, -0.21))
-      for (const y of [0.05, 0.4, 0.72, 1.04]) g.add(box(0.96, 0.05, 0.5, C.wood, 0, y, 0))
-    }))
+    const kind = s.kind || (s.fridge ? 'fridge' : 'shelf')
+    let modelMesh
+    if (kind === 'meat') modelMesh = this.makeMeatVerticalFreezerModel()
+    else if (kind === 'produce') {
+      if (s.style === 'wall') modelMesh = this.makeProduceWallModel()
+      else modelMesh = this.makeProducePyramidModel()
+    }
+    else if (kind === 'fridge') modelMesh = this.makeFreezerModel()
+    else modelMesh = this.shelfModel(s.variant, { a: false, b: false }, s.tall, s.mir)
+    gr.add(modelMesh)
     const items = new THREE.Group(); gr.add(items)
-    const label = sprite(tagTex('—', '#cfc6b8'), 0.95, 0.3); label.position.set(0, s.fridge ? 0.95 : 1.35, 0.05); gr.add(label)
-    if (s.fridge) addHit(gr, 0.96, 0.6, 0.72); else addHit(gr, 0.98, 1.15, 0.54)
+    const isCooled = kind === 'fridge' || kind === 'meat'
+    const labelY = kind === 'meat' ? 1.36 : kind === 'produce' ? (s.style === 'wall' ? 1.1 : 0.65) : s.fridge ? 0.62 : 1.35
+    const labelZ = kind === 'meat' ? 0.29 : s.fridge ? 0.28 : (kind === 'produce' ? 0.34 : 0.05)
+    const label = sprite(tagTex('—', '#cfc6b8'), 0.95, 0.3); label.position.set(0, labelY, labelZ); label.visible = false; gr.add(label)
+    let status = null
+    if (isCooled) { status = sprite(tagTex('', '#fff'), 1.05, 0.33); status.material.depthTest = false; status.renderOrder = 10; status.position.set(0, kind === 'meat' ? 1.78 : 1.0, labelZ); status.visible = false; gr.add(status) }
+    if (kind === 'meat') addHit(gr, 0.96, 1.45, 0.58)
+    else if (kind === 'produce') {
+      if (s.style === 'wall') addHit(gr, 0.96, 1.5, 0.68, 0.75)
+      else addHit(gr, 0.96, 0.65, 0.68, 0.35)
+    }
+    else if (s.fridge) addHit(gr, 0.96, 0.6, 0.72)
+    else if (s.variant === 'corner') addHit(gr, 0.98, 1.15, 0.98)
+    else if (s.variant === 'wall') addHit(gr, 0.98, 1.5, 0.54, 0.75)
+    else addHit(gr, 0.98, 1.15, 0.54)
     this.scene.add(gr)
-    return { gr, items, label, key: '', pid: null, inst: [], fridge: !!s.fridge }
+    return { gr, items, label, status, statusKey: '', key: '', pid: null, inst: [], fridge: isCooled, kind, style: s.style, level: s.level, variant: s.variant, tall: s.tall, mir: s.mir, model: modelMesh, mkey: '00' }
   }
   // coloca o móvel no lugar salvo, ou na posição da mão se estiver sendo movido
   place(gr, kind, o) {
-    const h = ui.held, q = h && h.kind === kind && (kind === 'counter' || h.id === o.id) ? h : o
+    const h = ui.held
+    if (h && h.kind === 'produceGroup' && o.groupId === h.groupId) {
+      const slots = produceSlots(h.x, h.z, h.rot, h.style || o.style || 'island')
+      const slotPos = slots.find((s) => s.slot === o.slot)
+      if (slotPos) {
+        gr.position.set(slotPos.x, 0.1, slotPos.z)
+        gr.rotation.y = ((slotPos.rot || 0) * Math.PI) / 2
+        return
+      }
+    }
+    const q = h && h.kind === kind && (kind === 'counter' || h.id === o.id) ? h : o
     gr.position.set(q.x, q === h ? 0.1 : 0, q.z)
     gr.rotation.y = ((q.rot || 0) * Math.PI) / 2
   }
   // freezer horizontal aberto por dentro, com tampa de vidro (o modelo pronto é um bloco fechado)
   makeFreezerModel() {
-    const body = 0xe8eef4, trim = 0x8fa6b8
+    const body = 0xe8eef4, trim = 0x8fa6b8, darkBack = 0x1e242b
     const shell = baked('freezer', (g) => {
+      // fundo interno e base
       g.add(box(0.92, 0.07, 0.66, 0xbcd7e6, 0, 0.035, 0))
-      for (const z of [-0.305, 0.305]) { g.add(box(0.92, 0.42, 0.05, body, 0, 0.21, z)); g.add(box(0.96, 0.03, 0.08, trim, 0, 0.435, z)) }
-      for (const x of [-0.435, 0.435]) { g.add(box(0.05, 0.42, 0.56, body, x, 0.21, 0)); g.add(box(0.08, 0.03, 0.66, trim, x, 0.435, 0)) }
+      // laterais
+      for (const x of [-0.435, 0.435]) {
+        g.add(box(0.05, 0.42, 0.56, body, x, 0.21, 0))
+        g.add(box(0.08, 0.03, 0.66, trim, x, 0.435, 0))
+      }
+      // FRENTE (z = +0.305): painel com visor digital LED azul, faixa ciano e moldura frontal
+      g.add(box(0.92, 0.42, 0.05, body, 0, 0.21, 0.305))
+      g.add(box(0.96, 0.03, 0.08, trim, 0, 0.435, 0.305))
+      // Faixa horizontal ciano na frente
+      g.add(box(0.86, 0.05, 0.015, 0x38bdf8, 0, 0.12, 0.335))
+      // Painel de controle digital LED na frente
+      g.add(box(0.18, 0.08, 0.02, 0x1f2937, 0.28, 0.26, 0.335))
+      g.add(box(0.10, 0.03, 0.005, 0x67e8f9, 0.28, 0.26, 0.346))
+
+      // TRASEIRA (z = -0.305): serpentina / condensador preto do compressor
+      g.add(box(0.92, 0.42, 0.05, body, 0, 0.21, -0.305))
+      g.add(box(0.96, 0.03, 0.08, trim, 0, 0.435, -0.305))
+      // Grade condensadora preta traseira
+      g.add(box(0.86, 0.34, 0.02, darkBack, 0, 0.20, -0.335))
+      for (let y = 0.08; y <= 0.34; y += 0.05) {
+        g.add(box(0.82, 0.012, 0.01, 0x111418, 0, y, -0.346))
+      }
+      // Divisória central
       g.add(box(0.03, 0.02, 0.58, trim, 0, 0.44, 0))
     })
     this.glassGeo ||= new THREE.BoxGeometry(0.84, 0.01, 0.56)
     this.glassMat ||= new THREE.MeshStandardMaterial({ color: 0xdff1f8, transparent: true, opacity: 0.16, roughness: 0.1, depthWrite: false })
     const glass = new THREE.Mesh(this.glassGeo, this.glassMat)
     glass.position.y = 0.44
-    const g = new THREE.Group(); g.add(shell, glass)
+    // Puxador cromado na borda frontal da tampa de vidro
+    const handleFront = box(0.36, 0.02, 0.03, 0xffffff, 0, 0.455, 0.18)
+    const g = new THREE.Group(); g.add(shell, glass, handleFront)
     return g
+  }
+  // freezer vertical de carnes: armário refrigerado alto com porta de vidro transparente
+  makeMeatVerticalFreezerModel() {
+    const metal = 0x3d444d, darkBase = 0x22262a, inox = 0xd5dde5, redTrim = 0x8f2828
+    const shell = baked('verticalFreezer', (g) => {
+      // base com compressor e ventilação
+      g.add(box(0.94, 0.22, 0.56, darkBase, 0, 0.11, 0))
+      // laterais e fundo do armário
+      for (const x of [-0.44, 0.44]) g.add(box(0.06, 1.18, 0.54, metal, x, 0.81, 0))
+      g.add(box(0.88, 1.18, 0.05, metal, 0, 0.81, -0.25))
+      // testeira superior
+      g.add(box(0.94, 0.12, 0.56, redTrim, 0, 1.34, 0))
+      // condensador traseiro
+      g.add(box(0.86, 0.38, 0.02, 0x181c20, 0, 0.28, -0.28))
+      // prateleiras internas de grade de aço
+      for (const y of [0.26, 0.60, 0.94]) {
+        g.add(box(0.84, 0.02, 0.46, inox, 0, y, 0))
+      }
+    })
+    this.vertGlassGeo ||= new THREE.BoxGeometry(0.84, 1.05, 0.02)
+    this.vertGlassMat ||= new THREE.MeshStandardMaterial({ color: 0xdaf0f8, transparent: true, opacity: 0.18, roughness: 0.08, depthWrite: false })
+    const doorGlass = new THREE.Mesh(this.vertGlassGeo, this.vertGlassMat)
+    doorGlass.position.set(0, 0.77, 0.27)
+    // puxador vertical longo
+    const handle = box(0.02, 0.45, 0.03, 0xffffff, 0.35, 0.77, 0.29)
+    const g = new THREE.Group(); g.add(shell, doorGlass, handle)
+    return g
+  }
+  // ---------- expositor de hortifruti: degraus de madeira com avental verde ----------
+  // bandeja aberta de madeira: fundo, frente baixa, laterais e a ripa da frente; topY = altura do fundo
+  produceTray(g, zc, topY, depth = 0.3, width = 0.94) {
+    const wood = 0xb98552, dark = 0x6b4a2b
+    g.add(box(width, 0.03, depth, wood, 0, topY, zc))
+    g.add(box(width, 0.11, 0.03, wood, 0, topY + 0.055, zc + depth / 2 - 0.015))
+    for (const x of [-width / 2 + 0.015, width / 2 - 0.015]) g.add(box(0.03, 0.1, depth, wood, x, topY + 0.05, zc))
+    g.add(box(width - 0.06, topY - 0.02, 0.03, dark, 0, (topY - 0.02) / 2, zc + depth / 2 - 0.1)) // painel de apoio por baixo
+  }
+  // uma lasca da ilha em pirâmide: os 4 lugares juntos formam uma pirâmide de degraus alta no centro e baixa nas pontas
+  // (no referencial do móvel, o centro da ilha fica no canto de trás à esquerda)
+  makeProducePyramidModel() {
+    const dark = 0x6b4a2b, green = 0x4f9d5b, cream = 0xf8efe0
+    return baked('produceIsland2', (g) => {
+      g.add(box(0.98, 0.07, 0.98, dark, 0, 0.035, 0)) // base
+      for (const [zc, topY] of [[-0.33, 0.68], [0, 0.5], [0.33, 0.32]]) this.produceTray(g, zc, topY)
+      for (const x of [-0.475, 0.475]) { // laterais em degraus
+        g.add(box(0.04, 0.68, 0.3, dark, x, 0.34, -0.33)); g.add(box(0.04, 0.5, 0.3, dark, x, 0.25, 0)); g.add(box(0.04, 0.32, 0.3, dark, x, 0.16, 0.33))
+      }
+      g.add(box(0.98, 0.13, 0.04, green, 0, 0.16, 0.49)) // avental verde na frente
+      g.add(box(0.5, 0.07, 0.01, cream, 0, 0.16, 0.515)) // plaquinha
+    })
+  }
+  // estante de parede 2×1: uma lasca por lugar, com ripas e testeira verde atrás e 3 degraus de bandeja
+  makeProduceWallModel() {
+    const dark = 0x6b4a2b, wood = 0xb98552, green = 0x4f9d5b, cream = 0xf8efe0
+    return baked('produceWall3', (g) => {
+      g.add(box(1.0, 0.07, 1.0, dark, 0, 0.035, 0))
+      for (const x of [-0.48, 0.48]) g.add(box(0.06, 1.5, 0.06, dark, x, 0.75, -0.44)) // montantes
+      for (const y of [0.7, 0.92, 1.14]) g.add(box(0.94, 0.12, 0.03, wood, 0, y, -0.47)) // ripas do fundo
+      g.add(box(1.02, 0.16, 0.08, green, 0, 1.45, -0.45)) // testeira
+      g.add(box(0.46, 0.08, 0.01, cream, 0, 1.45, -0.405))
+      for (const [zc, topY] of [[-0.28, 0.86], [0, 0.62], [0.28, 0.38]]) this.produceTray(g, zc, topY, 0.28)
+      for (const x of [-0.475, 0.475]) { g.add(box(0.04, 0.86, 0.28, dark, x, 0.43, -0.28)); g.add(box(0.04, 0.62, 0.28, dark, x, 0.31, 0)); g.add(box(0.04, 0.38, 0.28, dark, x, 0.19, 0.28)) }
+      g.add(box(1.0, 0.13, 0.04, green, 0, 0.16, 0.49)); g.add(box(0.5, 0.07, 0.01, cream, 0, 0.16, 0.515))
+    })
+  }
+  // montagem para a miniatura de construção: prateleira em fileira de 2, expositor completo, freezer
+  makeBuildModel(key) {
+    const g = new THREE.Group(), [kind, type] = key.split(':')
+    if (kind === 'shelf') {
+      const v = type === 'std' ? undefined : type
+      for (const [x, f] of [[-0.5, { a: 0, b: 1 }], [0.5, { a: 1, b: 0 }]]) { const m = this.shelfModel(v, f); m.position.x = x; g.add(m) }
+    } else if (kind === 'produce') {
+      for (const s of produceSlots(0, 0, 0, type)) {
+        const m = type === 'wall' ? this.makeProduceWallModel() : this.makeProducePyramidModel()
+        m.position.set(s.x, 0, s.z); m.rotation.y = (s.rot * Math.PI) / 2; g.add(m)
+      }
+    } else if (kind === 'meat') g.add(this.makeMeatVerticalFreezerModel())
+    else g.add(this.makeFreezerModel())
+    return g
+  }
+
+  // ---------- banner de propaganda: aparece com o upgrade de destaque e fica maior a cada nível ----------
+  bannerTex(level, pid) {
+    this._banners ||= new Map()
+    const key = level + '|' + (pid || '')
+    if (!this._banners.has(key)) {
+      this._banners.set(key, labelTex('banner|' + key, 256, 154, (g, w, h) => {
+        const bg = level >= 2 ? '#f2c25b' : '#ef8a77', ink = level >= 2 ? '#5b3a0a' : '#fff4e0'
+        g.fillStyle = '#3b2f4a'; g.beginPath(); g.roundRect(0, 0, w, h, 22); g.fill()
+        g.fillStyle = bg; g.beginPath(); g.roundRect(8, 8, w - 16, h - 16, 16); g.fill()
+        g.strokeStyle = ink; g.globalAlpha = 0.55; g.lineWidth = 4; g.setLineDash([14, 10]); g.beginPath(); g.roundRect(18, 18, w - 36, h - 36, 10); g.stroke(); g.globalAlpha = 1; g.setLineDash([])
+        const icon = pid ? assets.productIcon(pid) : null, size = 64
+        if (icon) g.drawImage(icon, 22, (h - size) / 2, size, size)
+        g.fillStyle = ink; g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '800 40px ui-rounded, system-ui, sans-serif'
+        g.fillText(level >= 2 ? 'DESTAQUE' : 'OFERTA', icon ? w / 2 + 34 : w / 2, h / 2 - 8)
+        g.font = '700 22px ui-rounded, system-ui, sans-serif'; g.fillText(level >= 2 ? '★★★' : '★', icon ? w / 2 + 34 : w / 2, h / 2 + 28)
+      }))
+    }
+    return this._banners.get(key)
+  }
+  // altura da base do banner: o topo de cada tipo de móvel
+  bannerBase(p) {
+    if (p.kind === 'meat') return 1.45
+    if (p.fridge) return 0.5
+    if (p.kind === 'produce') return p.style === 'wall' ? 1.62 : 0.78
+    return p.variant === 'wall' || p.tall ? 1.62 : 1.12
+  }
+  syncBanner(v, p, s) {
+    const level = s.boost || 0, key = level + '|' + (s.product || '') + '|' + this.bannerBase(p)
+    if (v.bannerKey !== key) {
+      v.bannerKey = key
+      if (v.banner) { v.gr.remove(v.banner); v.banner.traverse((o) => o.geometry?.dispose()); v.banner = null }
+      if (level > 0) {
+        // cada nível aumenta o banner em 45%: pequeno no primeiro, um pouco maior no segundo, e assim por diante
+        const w = 0.34 * (1 + 0.45 * (level - 1)), h = w * 0.6, pole = 0.18 + level * 0.04
+        const g = new THREE.Group(), base = this.bannerBase(p)
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.03, pole, 0.03), std(0x3b2f4a)); post.position.y = pole / 2; g.add(post)
+        const mat = new THREE.MeshBasicMaterial({ map: this.bannerTex(level, s.product), toneMapped: false })
+        for (const side of [0, Math.PI]) { // duas faces, para o texto ler certo dos dois lados
+          const board = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); board.position.set(0, pole + h / 2 - 0.02, side ? -0.006 : 0.006); board.rotation.y = side; board.userData.noOutline = true
+          g.add(board)
+        }
+        g.position.set(0, base, -0.12)
+        v.banner = g; v.gr.add(g)
+      }
+    }
+    if (v.banner) v.banner.rotation.y = Math.sin(this.t * 1.6 + (v.gr.position.x + v.gr.position.z) * 0.7) * 0.1 // balança de leve
+  }
+
+  // ---------- prateleiras que se mesclam: pontas livres arredondadas, emendas sem lateral ----------
+  // f.a / f.b: reta = vizinha à esquerda / à direita; canto = braço para a direita / braço para a frente
+  shelfModel(variant, f, tall, mir) {
+    if (variant === 'corner') return this.makeCornerShelfModel(f, tall, mir)
+    return this.makeStraightShelfModel(f, variant === 'wall')
+  }
+  // quem está do outro lado de cada emenda: reta com o mesmo giro, ou o braço certo de uma prateleira de canto
+  shelfMerge(p, at) {
+    const LX = [[1, 0], [0, -1], [-1, 0], [0, 1]], r4 = (n) => (((n.rot || 0) % 4) + 4) % 4
+    const rot = r4(p), get = (dx, dz) => at.get(p.x + dx + ',' + (p.z + dz))
+    const straight = (n, v) => !!n && n.kind === 'shelf' && n.variant !== 'corner' && n.variant === v
+    const corner = (n, v) => !!n && n.kind === 'shelf' && n.variant === 'corner' && (n.tall ? 'wall' : undefined) === v
+    if (p.variant === 'corner') {
+      const tv = p.tall ? 'wall' : undefined, sg = p.mir ? -1 : 1, [lx0, lz0] = LX[rot], [fx, fz] = DIRS[rot]
+      // direções das duas pernas de um canto: A para o lado da fileira, B para trás; um canto emenda com outro quando uma perna de cada aponta uma para a outra
+      const arms = (n) => { const c = r4(n), g = n.mir ? -1 : 1; return [[-g * LX[c][0], -g * LX[c][1]], [-DIRS[c][0], -DIRS[c][1]]] }
+      const reaches = (n, dx, dz) => corner(n, tv) && arms(n).some(([ax, az]) => ax === -dx && az === -dz)
+      const dA = [-sg * lx0, -sg * lz0], dB = [-fx, -fz]
+      const A = get(dA[0], dA[1]), B = get(dB[0], dB[1])
+      const rowA = straight(A, tv) && r4(A) === rot
+      return {
+        a: rowA || reaches(A, dA[0], dA[1]),
+        b: (straight(B, tv) && r4(B) === (sg > 0 ? (rot + 1) % 4 : (rot + 3) % 4)) || reaches(B, dB[0], dB[1]),
+        d: rowA && this.shelfDeep(A, at), // a fileira vizinha é funda (de costas para outra): o canto também enche o quadrante de trás
+        cc: reaches(A, dA[0], dA[1]) && reaches(B, dB[0], dB[1]), // as duas pernas emendam em outros cantos (bloco 2×2): enche o centro
+      }
+    }
+    const [lx, lz] = LX[rot], L = get(-lx, -lz), R = get(lx, lz), v = p.variant
+    // 1 = emenda com vizinha reta ou canto; 2 = encosta na traseira de uma prateleira perpendicular virada para o lado oposto (esquina em L ou T)
+    const cornerL = (N) => corner(N, v) && ((N.mir && r4(N) === rot) || (!N.mir && r4(N) === (rot + 3) % 4))
+    const cornerR = (N) => corner(N, v) && ((!N.mir && r4(N) === rot) || (N.mir && r4(N) === (rot + 1) % 4))
+    const join = (N, isCorner, buttRot) => ((straight(N, v) && r4(N) === rot) || isCorner(N) ? 1 : straight(N, v) && r4(N) === buttRot ? 2 : 0)
+    return { a: join(L, cornerL, (rot + 3) % 4), b: join(R, cornerR, (rot + 1) % 4) }
+  }
+  // prateleira com outra de costas para ela (mesmo tipo, viradas para lados opostos): cada uma estende a bandeja até a linha do meio
+  shelfDeep(p, at) {
+    if (p.kind !== 'shelf' || p.fridge || p.groupId != null || (p.variant && p.variant !== 'wall')) return false
+    const [dx, dz] = DIRS[(((p.rot || 0) % 4) + 6) % 4]
+    const n = at.get(p.x + dx + ',' + (p.z + dz))
+    return !!n && n.kind === 'shelf' && n.variant === p.variant && !!backPartner(p, [n])
+  }
+  makeStraightShelfModel(f, tall) {
+    const l = f.a | 0, r = f.b | 0, dp = f.d ? 1 : 0, H = tall ? 1.5 : 1.05, back = tall ? 0x6b4a2b : C.wood
+    return baked('shelf' + (tall ? 'W' : 'S') + l + r + (dp ? 'D' : ''), (g) => {
+      // l / r: 0 ponta livre (arredondada), 1 emenda reta, 2 vai até a traseira da prateleira perpendicular
+      const xl = l === 2 ? -0.79 : l ? -0.5 : -0.25, xr = r === 2 ? 0.79 : r ? 0.5 : 0.25, w = xr - xl, cx = (xl + xr) / 2
+      const dz = dp ? 0.75 : 0.5, zc = dp ? -0.125 : 0 // fundo: a frente fica em z = 0,25 e a bandeja vai até −0,5 (até a linha do meio) quando tem outra de costas
+      if (!dp) g.add(box(w, H, 0.04, back, cx, H / 2, -0.21))
+      for (const y of tall ? [0.05, 0.4, 0.72, 1.04, 1.4] : [0.05, 0.4, 0.72, 1.04]) {
+        g.add(box(w, 0.05, dz, C.wood, cx, y, zc))
+        if (dp) g.add(box(w, 0.07, 0.03, C.woodDark, cx, y + 0.06, -0.485)) // divisória baixa no meio do bloco
+        if (!l) trayEnd(g, -1, y, C.wood, 0.05, dp); if (!r) trayEnd(g, 1, y, C.wood, 0.05, dp)
+      }
+      if (tall) { // cimalha verde-água por cima, também com as pontas arredondadas
+        g.add(box(w, 0.1, dz, 0x5d9a93, cx, 1.5, zc))
+        if (!l) trayEnd(g, -1, 1.5, 0x5d9a93, 0.1, dp); if (!r) trayEnd(g, 1, 1.5, 0x5d9a93, 0.1, dp)
+      }
+      for (const [free, x] of [[!l, -0.485], [!r, 0.485]]) if (free) post(g, x, H, zc)
+    })
+  }
+  // canto convexo: duas pernas em L (para o lado da fileira e para trás) com as frentes para fora e a quina de fora arredondada;
+  // montado com a frente em +z e a ponta em +x; mir espelha (a fileira fica do outro lado)
+  makeCornerShelfModel(f, tall, mir) {
+    const l = f.a ? 1 : 0, r = f.b ? 1 : 0, H = tall ? 1.5 : 1.05, back = tall ? 0x6b4a2b : C.wood, teal = 0x5d9a93
+    // o quadrante de dentro só enche quando há bloco em volta (fileira funda ou cantos dos dois lados); no L simples ele fica vazio, como no desenho
+    const fill = f.d || f.cc ? 1 : 0
+    const mesh = baked('shelfCorner' + (tall ? 'W' : 'S') + l + r + (fill ? 'F' : ''), (g) => {
+      // fundo (face de dentro do L): ao longo da perna A e da perna B
+      g.add(box(l ? 0.25 : 0, H, 0.04, back, -0.375, H / 2, -0.21)); if (!l) g.children.pop()
+      g.add(box(0.04, H, r ? 0.25 : 0, back, -0.21, H / 2, -0.375)); if (!r) g.children.pop()
+      const layers = tall ? [[0.05, C.wood, 0.05], [0.4, C.wood, 0.05], [0.72, C.wood, 0.05], [1.04, C.wood, 0.05], [1.4, C.wood, 0.05], [1.5, teal, 0.1]] : [[0.05, C.wood, 0.05], [0.4, C.wood, 0.05], [0.72, C.wood, 0.05], [1.04, C.wood, 0.05]]
+      for (const [y, col, h] of layers) {
+        g.add(box(0.5, h, 0.5, col, 0, y, 0)) // quadrado do cotovelo
+        // arredonda a quina de fora (+x, +z): tira o canto do quadrado e põe um quarto de disco
+        g.children.pop()
+        g.add(box(0.25, h, 0.5, col, -0.125, y, 0)); g.add(box(0.25, h, 0.25, col, 0.125, y, -0.125))
+        quarter(g, 0, y, 0, 0, col, h)
+        if (l) g.add(box(0.25, h, 0.5, col, -0.375, y, 0)); else roundCap(g, -0.25, y, 0, Math.PI, col, h)
+        if (fill) g.add(box(0.25, h, 0.25, col, -0.375, y, -0.375))
+        if (r) g.add(box(0.5, h, 0.25, col, 0, y, -0.375)); else roundCap(g, 0, y, -0.25, Math.PI / 2, col, h)
+      }
+      if (!l) post(g, -0.485, H, 0)
+      if (!r) post(g, 0, H, -0.485)
+    })
+    if (!mir) return mesh
+    const g = new THREE.Group(); mesh.scale.x = -1; g.add(mesh); return g // espelhado: a fileira fica do lado +x
   }
   // cafeteria: balcão com máquina de café e vitrine de doces
   makeCafeView(id) {
@@ -454,6 +735,22 @@ export class Renderer {
   makeDecorView(d) {
     const gr = new THREE.Group(); gr.userData = { kind: 'decor', id: d.id }
     let model = assets.make(d.type)
+    if (DECOR[d.type]?.wall) { // decoração de parede: relógio (com a hora do jogo) ou quadro
+      model = new THREE.Group()
+      if (d.type === 'clock') {
+        // disco 3D fixo na parede (um sprite gira para a câmera e entra na parede, ficando cortado)
+        const back = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.06, 32), std(0x7a5a3a)); back.rotation.x = Math.PI / 2; back.position.set(0, 1.75, 0.03); back.castShadow = true; model.add(back)
+        const face = new THREE.Mesh(new THREE.CircleGeometry(0.34, 40), new THREE.MeshBasicMaterial({ map: this.clockTex(this.clockHM[0], this.clockHM[1]), transparent: true, toneMapped: false }))
+        face.position.set(0, 1.75, 0.065); model.add(face)
+        gr.userData.clock = face; this.clocks.push(face)
+      } else {
+        const hue = d.hue || 0, [w, h] = hue === 1 ? [0.9, 0.55] : [0.55, 0.7], col = [0xf2b8a8, 0xa8d4c8, 0xf2d58a][hue % 3]
+        model.add(box(w + 0.1, h + 0.1, 0.05, 0x7a5a3a, 0, 1.5, 0)); model.add(box(w, h, 0.06, col, 0, 1.5, 0.01))
+      }
+      gr.add(model); addHit(gr, 0.8, 0.8, 0.2, 1.55)
+      this.scene.add(gr)
+      return gr
+    }
     if (!model) {
       model = new THREE.Group()
       if (d.type === 'plant') {
@@ -493,11 +790,12 @@ export class Renderer {
   }
   syncDecor() {
     const alive = new Set(game.decor.map((d) => d.id))
-    for (const [id, gr] of this.decorViews) if (!alive.has(id)) { this.scene.remove(gr); this.decorViews.delete(id) }
+    for (const [id, gr] of this.decorViews) if (!alive.has(id)) { this.scene.remove(gr); this.decorViews.delete(id); if (gr.userData.clock) this.clocks = this.clocks.filter((c) => c !== gr.userData.clock) }
     for (const d of game.decor) {
       let gr = this.decorViews.get(d.id)
       if (!gr) { gr = this.makeDecorView(d); this.decorViews.set(d.id, gr) }
       this.place(gr, 'decor', d)
+      if (DECOR[d.type]?.wall) { gr.position.y = 0; gr.position.z = -0.47; gr.rotation.y = 0 } // pendurado na parede do fundo
       if (d.type === 'radio') { // o rádio balança no ritmo enquanto toca
         const set = gr.children[0].children.find((c) => c.userData.radio)
         if (set) set.scale.y = settings.musicOn || ui.externalPlaying ? 1 + Math.abs(Math.sin(this.t * 4.6)) * 0.05 : 1
@@ -539,13 +837,22 @@ export class Renderer {
     L.glow.material.color.setHex(c)
     L.glow.material.opacity = state === 'off' ? 0 : 0.55
   }
+  // seta que aponta para o móvel, desenhada no lugar onde o cliente (e o repositor) fica
+  arrowTex() {
+    return (this._arrowTex ||= labelTex('arrow', 128, 128, (g) => {
+      g.lineJoin = 'round'; g.lineWidth = 9; g.strokeStyle = '#3b2f4a'; g.fillStyle = '#fff4e0'
+      g.beginPath(); g.moveTo(64, 12); g.lineTo(106, 62); g.lineTo(78, 62); g.lineTo(78, 114); g.lineTo(50, 114); g.lineTo(50, 62); g.lineTo(22, 62); g.closePath(); g.stroke(); g.fill()
+    }))
+  }
   syncEditor() {
     if (this.gridG) this.gridG.visible = ui.editing
     // com nada na mão, o modo layout mostra onde fica a fila do caixa atual
     const list = ui.held?.preview || (ui.editing && game.register ? checkoutGuide(game.register, world.queueTiles) : [])
     this.editTiles.forEach((m, i) => {
-      const t = list[i], label = m.userData.label
+      const t = list[i], label = m.userData.label, arrow = m.userData.arrow
       m.visible = !!t
+      arrow.visible = !!t?.arrow
+      if (t?.arrow) { arrow.position.set(t.x, 0.06, t.z); arrow.rotation.y = Math.atan2(-(t.arrow[0] - t.x), -(t.arrow[1] - t.z)) }
       label.visible = !!t?.label
       if (t) { m.position.set(t.x, 0.03, t.z); m.material.color.setHex(t.c); m.material.opacity = t.o }
       if (t?.label) {
@@ -600,7 +907,18 @@ export class Renderer {
     v.items.clear(); v.inst = []
     if (!pid) return
     const spin = () => (Math.random() - 0.5) * 0.5, slots = []
-    if (v.fridge) { // dentro do freezer, em duas camadas abaixo do vidro
+    if (v.kind === 'meat') { // freezer vertical com 3 prateleiras altas
+      for (const y of [0.28, 0.62, 0.96]) for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) slots.push(itemAt(-0.3 + c * 0.2, y, r ? 0.08 : -0.08, spin()))
+    } else if (v.kind === 'produce') {
+      // cada degrau da bandeja recebe uma fileira de 4, apoiada no fundo da bandeja
+      const rows = v.style === 'wall'
+        ? [[0.875, -0.28], [0.635, 0], [0.395, 0.28]]
+        : [[0.695, -0.33], [0.515, 0], [0.335, 0.33]]
+      for (const [y, z] of rows) for (let c = 0; c < 4; c++) slots.push(itemAt(-0.3 + c * 0.2, y, z, spin()))
+    } else if (v.variant === 'corner') { // prateleira de canto: 4 itens por perna e por andar
+      const sg = v.mir ? -1 : 1, spots = [[-0.32, 0.09], [-0.32, -0.08], [-0.12, 0.09], [-0.12, -0.08], [0.09, -0.38], [-0.08, -0.38], [0.09, -0.2], [-0.08, -0.2]]
+      for (const y of [0.075, 0.425, 0.745]) for (const [x, z] of spots) slots.push(itemAt(sg * x, y, z, spin()))
+    } else if (v.fridge) { // dentro do freezer horizontal, em duas camadas abaixo do vidro
       for (let layer = 0; layer < 2; layer++) for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) slots.push(itemAt(-0.3 + c * 0.2, 0.08 + layer * 0.14, -0.18 + r * 0.18, spin()))
     } else {
       for (const y of [0.075, 0.425, 0.745]) for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) slots.push(itemAt(-0.3 + c * 0.2, y, r ? 0.09 : -0.08, spin()))
@@ -611,33 +929,67 @@ export class Renderer {
   syncShelves(dt) {
     const shelves = toRaw(game.shelves)
     const alive = new Set(shelves.map((s) => s.id))
-    for (const [id, v] of this.shelfViews) if (!alive.has(id)) { for (const m of v.inst) m.dispose(); this.scene.remove(v.gr); this.shelfViews.delete(id) }
+    for (const [id, v] of this.shelfViews) if (!alive.has(id)) { for (const m of v.inst) m.dispose(); this.scene.remove(v.gr); this.shelfViews.delete(id); this.tagDrop('s' + id) }
     // inclui a prateleira na mão, para já mostrar a união ao posicionar
-    const held = ui.held?.kind === 'shelf' ? toRaw(ui.held) : null
-    const poses = shelves.map((s) => (held?.id === s.id ? { ...s, x: held.x, z: held.z, rot: held.rot } : s))
-    const atTile = new Map(poses.map((p) => [p.x + ',' + p.z, p]))
+    const held = ui.held
+    let heldSlots = null
+    if (held?.kind === 'produceGroup') {
+      heldSlots = new Map(produceSlots(held.x, held.z, held.rot, held.style || 'island').map((s) => [s.slot, s]))
+    }
+    const poses = shelves.map((s) => {
+      if (held?.kind === 'shelf' && held.id === s.id) return { ...s, x: held.x, z: held.z, rot: held.rot }
+      if (heldSlots && s.groupId === held.groupId) {
+        const slotPos = heldSlots.get(s.slot)
+        if (slotPos) return { ...s, x: slotPos.x, z: slotPos.z, rot: slotPos.rot, style: slotPos.style, level: slotPos.level }
+      }
+      return s
+    })
+    const rawAt = new Map(poses.map((p) => [p.x + ',' + p.z, p]))
+    // a ponta de uma fileira, a 90° dela, é desenhada como canto; os dados da prateleira não mudam (mesmo tipo, giro e acesso)
+    const eff = poses.map((p) => { const e = elbowOf(p, rawAt); return e ? { ...p, variant: 'corner', tall: p.variant === 'wall', rot: e.rot, mir: e.mir } : p })
+    const atTile = new Map(eff.map((p) => [p.x + ',' + p.z, p]))
     for (const [i, s] of shelves.entries()) {
       let v = this.shelfViews.get(s.id)
-      if (!v) { v = this.makeShelfView(s); this.shelfViews.set(s.id, v) }
+      const pose = eff[i]
+      if (v && (v.style !== pose.style || v.level !== pose.level || v.variant !== pose.variant || v.tall !== pose.tall || !!v.mir !== !!pose.mir)) {
+        for (const m of v.inst) m.dispose()
+        this.scene.remove(v.gr)
+        this.shelfViews.delete(s.id)
+        v = null
+      }
+      if (!v) { v = this.makeShelfView(pose); this.shelfViews.set(s.id, v) }
+      if (v.kind === 'shelf') {
+        const f = this.shelfMerge(pose, atTile)
+        if (pose.variant !== 'corner') f.d = this.shelfDeep(pose, atTile) // de costas para outra prateleira: as duas viram um bloco mais fundo, com as frentes onde sempre ficaram
+        const mk = '' + +f.a + +f.b + (f.d ? 'd' : '') + (f.cc ? 'c' : '')
+        if (v.mkey !== mk) { v.gr.remove(v.model); v.model = this.shelfModel(pose.variant, f, pose.tall, pose.mir); v.gr.add(v.model); v.mkey = mk }
+      }
       this.place(v.gr, 'shelf', s)
-      // de costas uma para a outra, encostam no meio; a etiqueta segue no centro do lugar
-      const [dx, dz] = DIRS[((poses[i].rot || 0) + 2) % 4]
-      const behind = atTile.get(poses[i].x + dx + ',' + (poses[i].z + dz))
-      const joined = !s.fridge && behind && backPartner(poses[i], [behind])
-      if (joined) { v.gr.position.x += dx * BACK_SHIFT; v.gr.position.z += dz * BACK_SHIFT }
-      v.label.position.z = joined ? 0.05 + BACK_SHIFT : 0.05
+      this.syncBanner(v, pose, s)
+      v.gr.rotation.y = ((pose.rot || 0) * Math.PI) / 2 // o canto é desenhado com o giro dele, o dado da prateleira fica como está
+      v.label.position.z = 0.05
       if (v.pid !== s.product) { v.pid = s.product; this.fillShelfItems(v, s.product) }
       for (const m of v.inst) m.count = Math.min(s.count, m.instanceMatrix.count)
-      const k = `${s.product}|${s.price}|${s.count}`
+      if (v.status) {
+        const st = s.call ? 'técnico chamado' : s.broken ? 'QUEBRADO' : (s.wear || 0) >= FREEZER.warn ? 'revisão' : ''
+        if (st !== v.statusKey) {
+          v.statusKey = st
+          v.status.visible = !!st
+          if (st) { v.status.material.map = tagTex(st, s.broken ? '#e0675d' : st === 'revisão' ? '#f8dfa2' : '#cfe3f2', s.broken ? '#fff' : '#3b2f4a'); v.status.material.needsUpdate = true }
+        }
+      }
+      this.tagView('s' + s.id, v, 'shelf', s.id, s.groupId || 's' + s.id)
+      const k = `${s.product}|${s.price}|${s.count}|${!!s.broken}`
       if (k !== v.key) {
         v.key = k
-        const p = s.product && PID[s.product]
-        let tex
-        if (!p) tex = tagTex('vazia', '#cfc6b8', '#6b6070')
-        else if (s.price == null) tex = tagTex('sem preço', '#f4a09a', undefined, s.product)
-        else if (s.count === 0) tex = tagTex('esgotado', '#f4a09a', undefined, s.product)
-        else tex = tagTex(`${money(s.price).slice(3)} · ${s.count}`, s.count <= 6 ? '#f8dfa2' : '#f6e7cf', undefined, s.product)
-        v.label.material.map = tex; v.label.material.needsUpdate = true
+        const p = s.product && PID[s.product], pid = s.product || null
+        let d
+        if (s.broken) d = { text: s.count ? `desligado · ${s.count}` : 'desligado', bg: '#e0675d', fg: '#fff', pid }
+        else if (!p) d = { text: 'vazia', bg: '#cfc6b8', fg: '#6b6070' }
+        else if (s.price == null) d = { text: 'sem preço', bg: '#f4a09a', pid }
+        else if (s.count === 0) d = { text: 'esgotado', bg: '#f4a09a', pid }
+        else d = { text: `${money(s.price).slice(3)} · ${s.count}`, bg: s.count <= 6 ? '#f8dfa2' : '#f6e7cf', pid }
+        this.tagText('s' + s.id, d)
       }
     }
   }
@@ -650,7 +1002,7 @@ export class Renderer {
     })
     const peek = new THREE.Group(); open.add(peek)
     gr.add(closed, open)
-    const label = sprite(tagTex('', '#fff'), 0.8, 0.25); label.position.y = 0.85; gr.add(label)
+    const label = sprite(tagTex('', '#fff'), 0.8, 0.25); label.position.y = 0.85; label.visible = false; gr.add(label)
     addHit(gr, 0.66, 0.5, 0.56)
     gr.position.set(0, 0, 0)
     this.scene.add(gr)
@@ -659,7 +1011,7 @@ export class Renderer {
   syncBoxes(dt) {
     const boxes = toRaw(game.boxes)
     const alive = new Set(boxes.map((b) => b.id))
-    for (const [id, v] of this.boxViews) if (!alive.has(id)) { this.scene.remove(v.gr); this.boxViews.delete(id) }
+    for (const [id, v] of this.boxViews) if (!alive.has(id)) { this.scene.remove(v.gr); this.boxViews.delete(id); this.tagDrop('b' + id) }
     const slots = boxSlots(boxes, game.plan)
     for (const b of boxes) {
       let v = this.boxViews.get(b.id)
@@ -681,11 +1033,11 @@ export class Renderer {
         if (b.product) v.peek.add(assets.makeItemInstances(b.product, [0, 1, 2, 3].map((i) => itemAt(-0.17 + (i % 2) * 0.34, 0.3, i > 1 ? 0.08 : -0.08))))
       }
       v.gr.scale.setScalar(sel ? 0.8 : 1)
+      this.tagView('b' + b.id, v, 'box', b.id, sel ? 'b' + b.id : `c${p.x.toFixed(2)},${p.z.toFixed(2)}`)
       const k = `${b.product}|${b.count}|${b.state}`
       if (k !== v.key) {
         v.key = k
-        v.label.material.map = b.state === 'empty' ? tagTex('vazia', '#e8dcc8') : tagTex(String(b.count), b.state === 'open' ? '#fbe6a8' : '#f6e7cf', undefined, b.product)
-        v.label.material.needsUpdate = true
+        this.tagText('b' + b.id, b.state === 'empty' ? { text: 'vazia', bg: '#e8dcc8' } : { text: String(b.count), bg: b.state === 'open' ? '#fbe6a8' : '#f6e7cf', pid: b.product })
         v.label.position.y = isOpen ? 0.95 : 0.8
       }
     }
@@ -693,13 +1045,17 @@ export class Renderer {
   makeActorView(a) {
     const gr = new THREE.Group()
     const hue = a.hue ?? 0.5
-    const shirt = a.kind === 'player' ? C.coral : a.kind === 'staff' ? (a.role === 'cashier' ? C.mustard : C.teal) : new THREE.Color().setHSL(hue, 0.45, 0.68).getHex()
-    const ch = a.kind === 'pet' ? assets.makeAnim(a.species) : a.kind === 'player' ? assets.makeCharacter(settings.character) : assets.makeNpc(a.kind === 'staff', a.hue ?? Math.random())
+    const shirt = a.kind === 'player' ? C.coral : a.kind === 'staff' ? (a.role === 'cashier' ? C.mustard : C.teal) : a.kind === 'tech' ? C.plum : new THREE.Color().setHSL(hue, 0.45, 0.68).getHex()
+    const ch = a.kind === 'pet' ? assets.makeAnim(a.species)
+      : a.kind === 'player' ? assets.makeCharacter(settings.character)
+      : a.kind === 'staff' && a.member ? assets.makePersonModel(a.member.g, a.member.look)
+      : a.kind === 'tech' ? assets.makeWorker()
+      : assets.makeNpc(a.kind === 'staff', a.hue ?? Math.random())
     const body = new THREE.Group(); gr.add(body)
     let mixer = null, clips = {}
     if (ch) {
       if (a.kind === 'player') assets.putHat(ch.obj, settings.hat, settings.hatColor)
-      else if (a.kind === 'staff') assets.putHat(ch.obj, 'cap', a.role === 'cashier' ? '#f2c25b' : a.role === 'barista' ? '#ef8a77' : '#6fb3a8')
+      else if (a.kind === 'staff') assets.putHat(ch.obj, 'cap', STAFF_CAP[a.role] || '#6fb3a8')
       else if (a.thief) assets.putHat(ch.obj, 'beanie', '#3b2f4a')
       ch.obj.traverse((o) => { if (o.isMesh) o.castShadow = false }) // quem anda usa a sombra redonda no chão
       body.add(ch.obj)
@@ -722,6 +1078,7 @@ export class Renderer {
     if (a.kind === 'player') { const ar = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.2, 4), std(C.mustard, { emissive: 0x6a4a00 })); ar.rotation.x = Math.PI; ar.position.y = 1.4; gr.add(ar); gr.userData.arrow = ar }
     const emo = sprite(emojiTex('🙂'), 0.5, 0.5); emo.position.y = 1.15; emo.visible = false; gr.add(emo)
     const tag = sprite(tagTex('', '#b9e4c4'), 1.05, 0.33); tag.visible = false; gr.add(tag)
+    const note = sprite(tagTex('', '#f8dfa2'), 1.05, 0.33); note.visible = false; note.position.y = 1.35; gr.add(note)
     if (a.kind === 'pet') { // área de clique maior que o bichinho
       Object.assign(gr.userData, { kind: 'pet', id: a.id })
       addHit(gr, 0.8, 0.8, 0.8)
@@ -730,7 +1087,7 @@ export class Renderer {
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.01; shadow.userData.noOutline = true; gr.add(shadow)
     gr.position.set(a.x, 0, a.z)
     this.scene.add(gr)
-    return { gr, body, emo, tag, mixer, clips, emoKey: '', tagKey: '', ph: Math.random() * 6 }
+    return { gr, body, emo, tag, note, mixer, clips, emoKey: '', tagKey: '', noteKey: '', ph: Math.random() * 6 }
   }
   syncActors(dt) {
     const list = world.actors
@@ -738,7 +1095,7 @@ export class Renderer {
     for (const [id, v] of this.actorViews) if (!alive.has(id)) { this.scene.remove(v.gr); this.actorViews.delete(id) }
     for (const a of list) {
       let v = this.actorViews.get(a.id)
-      const skin = a.kind === 'player' ? `${settings.character}|${settings.hat}|${settings.hatColor}` : a.kind === 'pet' ? a.species : ''
+      const skin = a.kind === 'player' ? `${settings.character}|${settings.hat}|${settings.hatColor}` : a.kind === 'pet' ? a.species : a.member ? `${a.member.g}${a.member.look}` : ''
       if (v && v.skin !== skin) { this.scene.remove(v.gr); v = null }
       if (!v) { v = this.makeActorView(a); v.skin = skin; this.actorViews.set(a.id, v) }
       v.gr.position.x = a.x; v.gr.position.z = a.z
@@ -760,11 +1117,166 @@ export class Renderer {
       // balão com o valor pago: sobe devagar acima da emoção
       v.tag.visible = !!a.bubble
       if (a.bubble) {
-        if (v.tagKey !== a.bubble) { v.tag.material.map = tagTex('+ ' + a.bubble, '#b9e4c4', '#245c43'); v.tag.material.needsUpdate = true; v.tagKey = a.bubble }
+        if (v.tagKey !== a.bubble) {
+          const cost = a.bubble.startsWith('-') // valor pago pela loja (técnico) em vez de recebido
+          v.tag.material.map = cost ? tagTex('− ' + a.bubble.slice(1), '#f4c3bd', '#7a2a22') : tagTex('+ ' + a.bubble, '#b9e4c4', '#245c43')
+          v.tag.material.needsUpdate = true; v.tagKey = a.bubble
+        }
         v.tag.position.y = 1.6 + (2.6 - a.bubbleT) * 0.12
       }
+      v.note.visible = !!a.note && !a.bubble
+      if (a.note && v.noteKey !== a.note) { v.note.material.map = tagTex(a.note, '#f8dfa2'); v.note.material.needsUpdate = true; v.noteKey = a.note }
       if (v.gr.userData.arrow) v.gr.userData.arrow.position.y = 1.4 + Math.sin(this.t * 4) * 0.05
     }
+  }
+
+  // ---------- sujeira no chão: manchas clicáveis para limpar ----------
+  dirtTex(type) {
+    return labelTex('dirt|' + type, 128, 128, (g) => {
+      const blob = (x, y, r, al) => { g.globalAlpha = al; g.beginPath(); g.ellipse(x, y, r, r * 0.8, 0, 0, 7); g.fill() }
+      if (type === 'mud') { // pegadas de barro
+        g.fillStyle = '#6b4a2e'
+        for (const [x, y, s] of [[44, 96, 1], [80, 70, 1], [48, 40, 0.9], [84, 16, 0.85]]) { blob(x, y, 13 * s, 0.75); blob(x + 2, y - 15 * s, 7 * s, 0.75) }
+      } else if (type === 'crumbs') { // farelo
+        g.fillStyle = '#c8903f'
+        for (let i = 0; i < 22; i++) blob(64 + Math.cos(i * 2.4) * (12 + (i * 7) % 40), 64 + Math.sin(i * 2.4) * (10 + (i * 5) % 36), 4 + (i % 3) * 2, 0.85)
+      } else { // algo derramado
+        g.fillStyle = '#9a7a4a'
+        blob(64, 64, 40, 0.55); blob(40, 50, 18, 0.55); blob(88, 80, 16, 0.55); blob(70, 30, 12, 0.5)
+      }
+    })
+  }
+  syncDirt() {
+    const list = toRaw(game.dirt)
+    const alive = new Set(list.map((d) => d.id))
+    for (const [id, v] of this.dirtViews) if (!alive.has(id)) { this.scene.remove(v.gr); this.dirtViews.delete(id) }
+    list.forEach((d, i) => {
+      let v = this.dirtViews.get(d.id)
+      if (!v) {
+        const gr = new THREE.Group(); gr.userData = { kind: 'dirt', id: d.id }
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({ map: this.dirtTex(d.type), transparent: true, depthWrite: false, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2 }))
+        mesh.rotation.x = -Math.PI / 2; mesh.rotation.z = d.rot || 0; mesh.userData.noOutline = true
+        gr.add(mesh); addHit(gr, 0.6, 0.12, 0.6, 0.06)
+        this.scene.add(gr)
+        v = { gr, mesh, level: 0 }
+        this.dirtViews.set(d.id, v)
+      }
+      v.gr.position.set(d.x + (d.ox || 0), 0.014 + (i % 7) * 0.0006, d.z + (d.oz || 0))
+      if (v.level !== d.level) { v.level = d.level; v.mesh.scale.setScalar(0.45 + 0.2 * d.level) }
+    })
+  }
+  // tapete de entrada com o texto escolhido; sem compra, a entrada fica sem tapete
+  syncDoormat() {
+    const m = game.doormat, { rows, doorX } = dims(game.plan)
+    const k = m ? `${m.text}|${m.color}|${doorX}|${rows}` : ''
+    if (k === this.matKey) return
+    this.matKey = k
+    if (this.matG) { this.scene.remove(this.matG); this.matG.geometry.dispose(); this.matG.material.map?.dispose(); this.matG.material.dispose(); this.matG = null }
+    if (!m) return
+    const cv = document.createElement('canvas'); cv.width = 512; cv.height = 320
+    const g = cv.getContext('2d')
+    g.fillStyle = m.color; g.beginPath(); g.roundRect(8, 8, 496, 304, 40); g.fill()
+    g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 10; g.setLineDash([22, 14]); g.beginPath(); g.roundRect(30, 30, 452, 260, 28); g.stroke()
+    g.fillStyle = '#fff8ec'; g.textAlign = 'center'; g.textBaseline = 'middle'
+    let size = 96
+    do { g.font = `800 ${size}px ui-rounded, system-ui, sans-serif`; size -= 4 } while (g.measureText(m.text).width > 420 && size > 30)
+    g.fillText(m.text, 256, 166)
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4
+    const mat = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.66), new THREE.MeshStandardMaterial({ map: tex, roughness: 1, alphaTest: 0.5, polygonOffset: true, polygonOffsetFactor: -1 }))
+    mat.rotation.x = -Math.PI / 2; mat.position.set(doorX, 0.013, rows - 0.95); mat.receiveShadow = true
+    this.scene.add(mat); this.matG = mat
+  }
+
+  // ---------- etiquetas em HTML sobre a tela ----------
+  // uma pilha por coluna de caixas (ou expositor), alinhada por baixo com TAG_GAP px de gap, e uma linha liga cada etiqueta ao seu objeto; passar o mouse na tag destaca o objeto
+  initTags() {
+    document.querySelectorAll('.tag-layer').forEach((el) => el.remove()) // recarga a quente: não deixa camadas antigas
+    const layer = (this.tagLayer = document.createElement('div')); layer.className = 'tag-layer'
+    this.tagSvg = document.createElementNS(SVG_NS, 'svg'); layer.appendChild(this.tagSvg)
+    document.body.appendChild(layer)
+    this.tags = new Map(); this.tagLines = []; this.tagHover = null; this._mo = null
+    this.tagTmp = new THREE.Vector3()
+  }
+  tagView(id, view, kind, kid, group = id) {
+    let t = this.tags.get(id)
+    if (!t) {
+      const el = document.createElement('div'); el.className = 'tag'
+      t = { id, kind, kid, group, el, key: '', w: 0, h: TAG_H, v: view, shown: true }
+      el.addEventListener('mouseenter', () => { this.tagHover = t })
+      el.addEventListener('mouseleave', () => { if (this.tagHover === t) this.tagHover = null })
+      el.addEventListener('click', (e) => this.onClick?.({ kind: t.kind, id: t.kid, obj: t.v.gr }, e))
+      this.tagLayer.appendChild(el)
+      this.tags.set(id, t)
+    }
+    t.v = view; t.group = group
+  }
+  tagText(id, d) {
+    const t = this.tags.get(id)
+    if (!t) return
+    const key = `${d.text}|${d.bg}|${d.fg || ''}|${d.pid || ''}`
+    if (key === t.key) return
+    t.key = key
+    t.el.textContent = ''
+    if (d.pid) { const im = document.createElement('img'); im.src = assets.productThumb(d.pid); im.alt = ''; t.el.appendChild(im) }
+    const sp = document.createElement('span'); sp.textContent = d.text; t.el.appendChild(sp)
+    t.el.style.background = d.bg; t.el.style.color = d.fg || '#3b2f4a'
+    t.w = 0 // medido no próximo quadro
+  }
+  tagDrop(id) {
+    const t = this.tags.get(id)
+    if (t) { t.el.remove(); this.tags.delete(id); if (this.tagHover === t) this.tagHover = null }
+  }
+  syncTags() {
+    const L = this.tagLayer, hidden = !!(ui.modal || ui.build)
+    L.style.visibility = hidden ? 'hidden' : 'visible'
+    L.classList.toggle('pass', !!ui.held) // com um móvel na mão, o mouse é do chão
+    if (hidden) return
+    this.camera.updateMatrixWorld()
+    const W = this.canvas.clientWidth, H = this.canvas.clientHeight, v = this.tagTmp, items = []
+    for (const t of this.tags.values()) {
+      if (!t.w) t.w = t.el.offsetWidth || 0
+      t.v.label.getWorldPosition(v); v.project(this.camera)
+      if (!(v.z > -1 && v.z < 1 && t.w > 0)) { if (t.shown) { t.el.style.display = 'none'; t.shown = false } continue }
+      t.sx = ((v.x + 1) / 2) * W; t.sy = ((1 - v.y) / 2) * H
+      items.push(t)
+    }
+    // uma pilha por coluna física de caixas (ou por expositor): colunas diferentes nunca se juntam, mesmo que fiquem perto na tela
+    const groups = new Map()
+    for (const t of items) { if (!groups.has(t.group)) groups.set(t.group, []); groups.get(t.group).push(t) }
+    const place = (t, x, y) => {
+      if (!t.shown) { t.el.style.display = ''; t.shown = true }
+      const tx = Math.round(x), ty = Math.round(y)
+      if (t.px !== tx || t.py !== ty) { t.px = tx; t.py = ty; t.el.style.transform = `translate(${tx}px,${ty}px)` }
+    }
+    const lines = []
+    for (const list of groups.values()) {
+      if (list.length === 1) { const t = list[0]; place(t, t.sx - t.w / 2, t.sy - t.h / 2); continue }
+      list.sort((a, b) => a.sy - b.sy) // a caixa de cima da coluna fica no topo da pilha
+      const cx = list.reduce((m, t) => m + t.sx, 0) / list.length
+      let y = Math.max(...list.map((t) => t.sy + t.h / 2))
+      for (let i = list.length - 1; i >= 0; i--) {
+        const t = list[i]; y -= t.h
+        place(t, cx - t.w / 2, y)
+        lines.push({ x1: cx, y1: y + t.h / 2, x2: t.sx, y2: t.sy, t })
+        y -= TAG_GAP
+      }
+    }
+    // destaque: a tag do objeto sob o mouse ganha contorno
+    for (const t of items) t.el.classList.toggle('hl', !!this._mo && t.v.gr === this._mo)
+    // linhas e pontos de ancoragem
+    while (this.tagLines.length < lines.length) {
+      const line = document.createElementNS(SVG_NS, 'line'), dot = document.createElementNS(SVG_NS, 'circle')
+      dot.setAttribute('r', '3'); this.tagSvg.append(line, dot); this.tagLines.push({ line, dot })
+    }
+    this.tagLines.forEach((o, i) => {
+      const l = lines[i]
+      o.line.style.display = o.dot.style.display = l ? '' : 'none'
+      if (!l) return
+      const on = this.tagHover === l.t || l.t.el.classList.contains('hl')
+      o.line.setAttribute('x1', l.x1.toFixed(1)); o.line.setAttribute('y1', l.y1.toFixed(1)); o.line.setAttribute('x2', l.x2.toFixed(1)); o.line.setAttribute('y2', l.y2.toFixed(1))
+      o.dot.setAttribute('cx', l.x2.toFixed(1)); o.dot.setAttribute('cy', l.y2.toFixed(1))
+      o.line.setAttribute('class', on ? 'tl on' : 'tl'); o.dot.setAttribute('class', on ? 'td on' : 'td')
+    })
   }
 
   // ---------- horário do dia ----------
@@ -812,6 +1324,7 @@ export class Renderer {
         for (const v of this.boxViews.values()) add(v.gr)
         add(this.doorG)
         for (const p of world.pets) add(this.actorViews.get(p.id)?.gr)
+        for (const v of this.dirtViews.values()) add(v.gr)
         for (const d of toRaw(game.decor)) if (isUsable(d)) add(this.decorViews.get(d.id))
       }
       for (const h of this.ray.intersectObjects(hits, false)) {
@@ -864,20 +1377,23 @@ export class Renderer {
     }
     this.shadowTick = (this.shadowTick + 1) % (ui.held ? 3 : SHADOW_EVERY)
     if (!this.shadowTick) this.r.shadowMap.needsUpdate = true
-    this.syncShelves(dt); this.syncDecor(); this.syncBoxes(dt); this.syncActors(dt); this.syncDoors(dt); this.syncLamp(); this.syncEditor()
+    this.syncShelves(dt); this.syncDecor(); this.syncBoxes(dt); this.syncActors(dt); this.syncDoors(dt); this.syncLamp(); this.syncEditor(); this.syncDirt(); this.syncDoormat()
     this.applyTime()
     this.syncTheft()
     const h = this.hover
     let mo = h && h.obj && !ui.modal ? h.obj : null
     const tg = world.target
-    if (!mo && tg) mo = tg.kind === 'box' ? this.boxViews.get(tg.id)?.gr : tg.kind === 'shelf' ? this.shelfViews.get(tg.id)?.gr : tg.kind === 'counter' ? this.counterG : tg.kind === 'door' ? this.doorG : tg.kind === 'cafe' ? this.cafeG : tg.kind === 'pet' ? this.actorViews.get(tg.id)?.gr : tg.kind === 'decor' ? this.decorViews.get(tg.id) : null
+    if (!mo && tg) mo = tg.kind === 'box' ? this.boxViews.get(tg.id)?.gr : tg.kind === 'shelf' ? this.shelfViews.get(tg.id)?.gr : tg.kind === 'counter' ? this.counterG : tg.kind === 'door' ? this.doorG : tg.kind === 'cafe' ? this.cafeG : tg.kind === 'pet' ? this.actorViews.get(tg.id)?.gr : tg.kind === 'decor' ? this.decorViews.get(tg.id) : tg.kind === 'dirt' ? this.dirtViews.get(tg.id)?.gr : null
+    if (this.tagHover && this.tags.has(this.tagHover.id)) mo = this.tagHover.v.gr
+    this._mo = mo
     const selection = this.selectedObjects(mo)
     this.updateCamera(dt)
+    this.syncTags()
     this.syncBuild()
     // relógio da parede + cenário animado
     const hh = 9 + (game.phase === 'open' || game.phase === 'lunch' ? (game.clock / DAY_SECONDS) * 12 : game.phase === 'prep' ? -0.5 : game.phase === 'night' ? 12 : 12)
     const hi = Math.floor(hh), mi = Math.floor((hh % 1) * 60 / 5) * 5
-    if (this.clock && this.clockKey !== hi * 100 + mi) { this.clockKey = hi * 100 + mi; this.clock.material.map = this.clockTex(hi, mi); this.clock.material.needsUpdate = true }
+    if (this.clockKey !== hi * 100 + mi) { this.clockKey = hi * 100 + mi; this.clockHM = [hi, mi]; for (const c of this.clocks) { c.material.map = this.clockTex(hi, mi); c.material.needsUpdate = true } }
     const dayF = game.phase === 'open' || game.phase === 'lunch' ? Math.sin(Math.min(1, game.clock / DAY_SECONDS) * Math.PI) * 0.9 + 0.1 : game.phase === 'prep' ? 0.5 : game.phase === 'closing' ? 0.15 : 0
     this.scenery.update(dt, dayF, this.lampLevel || 0)
     this.r.render(this.scene, this.camera)

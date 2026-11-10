@@ -1,5 +1,7 @@
 <script setup>
-import { game, ui, uid, money, upgradeType, rollMarket, refOf } from '../game/state.js'
+import { game, ui, uid, money, upgradeType, rollMarket, refOf, gainXp, xpNext } from '../game/state.js'
+import { makeRequest, postJobAd } from '../game/team.js'
+import { makeGoals } from '../game/goals.js'
 import { world } from '../game/world.js'
 import { PRODUCTS, PACK, SHELF_CAP, DAY_SECONDS, LEVELS, LUNCH } from '../game/config.js'
 
@@ -35,6 +37,19 @@ function nextDay() { if (game.phase === 'night') world.startNextDay() }
 const lunchAt = (LUNCH.start / DAY_SECONDS) * 12 + 9
 
 const spawnCustomers = () => { for (let i = 0; i < 5; i++) world.spawnCustomer() }
+const levelUpXp = () => gainXp(xpNext() - game.career.xp)
+// sujeira em lugares aleatórios do salão
+function makeDirt() {
+  const types = ['mud', 'spill', 'crumbs']
+  for (let i = 0; i < 8; i++) world.addDirt(Math.floor(Math.random() * world.d.cols), Math.floor(Math.random() * world.d.rows), types[i % 3])
+}
+const wearFreezers = () => { for (const s of game.shelves) if (s.fridge && !s.broken) s.wear = Math.min(99, (s.wear || 0) + 40) }
+const breakFreezer = () => { const s = game.shelves.find((x) => x.fridge && !x.broken); if (s) world.breakFreezer(s) }
+const tired = () => { for (const m of game.team) m.energy = 15 }
+// um pedido novo para cada funcionário que ainda não tem
+function requests() {
+  for (const m of game.team) if (!m.request) m.request = makeRequest(m) || { type: 'dayoff', day: game.day }
+}
 function thief() { ui.modal = null; world.spawnThief() }
 </script>
 
@@ -75,6 +90,20 @@ function thief() { ui.modal = null; world.spawnThief() }
         <button class="btn sm" :disabled="!isOpen()" @click="goTo(20.9)">Ir para 20:54</button>
         <button class="btn sm" :disabled="!isOpen()" @click="endDay">Terminar dia</button>
         <button class="btn sm" :disabled="game.phase !== 'night'" @click="nextDay">Próximo dia</button>
+      </div>
+    </section>
+    <section>
+      <h3>Experiência, equipe e manutenção <span class="muted">Nv {{ game.career.earned }} · {{ game.career.xp }}/{{ xpNext() }} XP</span></h3>
+      <div class="row">
+        <button class="btn sm" @click="gainXp(50)">+50 XP</button>
+        <button class="btn sm" @click="levelUpXp">Subir 1 nível</button>
+        <button class="btn sm" @click="makeGoals">Novas metas</button>
+        <button class="btn sm" @click="postJobAd">Novos candidatos</button>
+        <button class="btn sm" :disabled="!game.team.length" @click="requests">Pedidos da equipe</button>
+        <button class="btn sm" :disabled="!game.team.length" @click="tired">Equipe cansada</button>
+        <button class="btn sm" @click="makeDirt">Sujar a loja</button>
+        <button class="btn sm" @click="wearFreezers">Gastar freezers (+40%)</button>
+        <button class="btn sm" @click="breakFreezer">Quebrar um freezer</button>
       </div>
     </section>
     <section>

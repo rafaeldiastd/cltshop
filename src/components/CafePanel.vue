@@ -2,22 +2,24 @@
 import { computed } from 'vue'
 import { PhCoffee, PhNewspaper, PhX } from '@phosphor-icons/vue'
 import PriceStepper from './PriceStepper.vue'
-import { game, ui, money, cafePrice, cafeCost, cafeRef, cafeCostChange, setCafePrice } from '../game/state.js'
-import { CAFE_MENU } from '../game/config.js'
+import { game, ui, money, cafePrice, cafeCost, cafeRef, cafeCostChange, setCafePrice, cafeMenu } from '../game/state.js'
+import { onDuty } from '../game/team.js'
 
 const open = computed(() => ui.panelCafe && game.cafe)
-const useMarket = () => { for (const m of CAFE_MENU) setCafePrice(m.id, cafeRef(m.id)) }
+const menu = computed(() => cafeMenu())
+const useMarket = () => { for (const m of menu.value) setCafePrice(m.id, cafeRef(m.id)) }
 </script>
 
 <template>
   <div v-if="open" class="card panel">
     <div class="head">
-      <b><PhCoffee weight="duotone" /> Preços da cafeteria</b>
+      <b><PhCoffee weight="duotone" /> Cardápio da Cafeteria</b>
       <button class="btn sm" aria-label="Fechar" @click="ui.panelCafe = false"><PhX weight="bold" /></button>
     </div>
-    <p v-if="!game.staff.barista" class="muted note">Contrate um atendente no computador para abrir.</p>
+    <p v-if="!onDuty('barista')" class="muted note">Contrate um atendente no computador para abrir.</p>
     <p v-if="game.market.text" class="news"><PhNewspaper weight="duotone" /> {{ game.market.text }}</p>
-    <div v-for="m in CAFE_MENU" :key="m.id" class="item">
+    <div v-if="!menu.length" class="muted note">Nenhuma receita descoberta ainda! Compre ingredientes no atacado para liberar clássicos no minilivro de receitas.</div>
+    <div v-for="m in menu" :key="m.id" class="item">
       <b>{{ m.name }}</b>
       <PriceStepper :cafe="m.id" />
       <div class="facts">
@@ -26,7 +28,7 @@ const useMarket = () => { for (const m of CAFE_MENU) setCafePrice(m.id, cafeRef(
         <span>Margem <b :class="cafePrice(m.id) - cafeCost(m.id) >= 0 ? 'good-t' : 'bad-t'">{{ money(cafePrice(m.id) - cafeCost(m.id)) }}</b></span>
       </div>
     </div>
-    <button class="btn sm" @click="useMarket">Usar preço de mercado em tudo</button>
+    <button v-if="menu.length" class="btn sm" @click="useMarket">Usar preço de mercado em tudo</button>
   </div>
 </template>
 

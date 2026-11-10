@@ -1,4 +1,4 @@
-import { LEVELS } from './config.js'
+import { LEVELS, DECOR } from './config.js'
 
 // rot = para onde o item está virado: 0 = +z (rua), 1 = +x, 2 = -z (fundo), 3 = -x
 export const DIRS = [[0, 1], [1, 0], [0, -1], [-1, 0]]
@@ -18,16 +18,61 @@ export const doorInside = (plan) => { const d = dims(plan); return { x: d.doorX,
 
 // ---------- sala do estoque (canto do fundo, porta na parede direita) ----------
 const STACK = 3 // caixas por lugar; o quadrado da porta fica livre
+// salas grandes (últimas ampliações do Mercadinho) empilham mais alto: de 19 lugares úteis em diante a capacidade cresce 4,3 por lugar e chega a 100 caixas na sala máxima (6×5)
+const STOCK_BIG = { from: 19, perTile: 4.3, max: 100 }
+const stockCap = (tiles) => (tiles <= STOCK_BIG.from ? tiles * STACK : Math.min(STOCK_BIG.max, Math.round(STOCK_BIG.from * STACK + (tiles - STOCK_BIG.from) * STOCK_BIG.perTile)))
 export const stockRoom = (plan) => {
   const { cols, rows } = plan.stock
-  return { cols, rows, cap: (cols * rows - 1) * STACK, wallX: cols - 0.5, wallZ: rows - 0.5, door: { x: cols - 1, z: rows - 1 }, doorOut: { x: cols, z: rows - 1 } }
+  return { cols, rows, cap: stockCap(cols * rows - 1), wallX: cols - 0.5, wallZ: rows - 0.5, door: { x: cols - 1, z: rows - 1 }, doorOut: { x: cols, z: rows - 1 } }
 }
 export const inStock = (plan, x, z) => { const r = stockRoom(plan); return x < r.wallX && z < r.wallZ }
 export const stockStand = (plan) => stockRoom(plan).door
 
+// ---------- canto visual: a ponta de uma fileira, a 90° dela, ganha a forma de canto convexo ----------
+// Só o desenho muda: a prateleira continua a mesma (tipo, giro, preço e acesso). S fica na ponta de uma fileira (vizinha N1, com a frente virada
+// para um lado) e está virada ao longo dela. Devolve o giro da peça (a frente principal é a de N1) e se ela é espelhada (N1 do lado +x local).
+const plainShelf = (n) => !!n && n.kind === 'shelf' && (!n.variant || n.variant === 'wall') && !n.fridge && n.groupId == null && n.x >= 0
+const rot4 = (n) => (((n.rot || 0) % 4) + 4) % 4
+export function elbowOf(s, at) {
+  if (!plainShelf(s)) return null
+  const r = rot4(s), fs = DIRS[r]
+  for (const dd of DIRS) {
+    if (!(fs[0] === dd[0] && fs[1] === dd[1]) && !(fs[0] === -dd[0] && fs[1] === -dd[1])) continue // S precisa estar virada ao longo da fileira
+    const n = at.get(s.x + dd[0] + ',' + (s.z + dd[1]))
+    if (!plainShelf(n) || n.variant !== s.variant) continue
+    const c = rot4(n), lx = LOCAL_X[c]
+    if (!((lx[0] === dd[0] && lx[1] === dd[1]) || (lx[0] === -dd[0] && lx[1] === -dd[1]))) continue // S não está na linha da fileira de N1
+    return { rot: c, mir: lx[0] === dd[0] && lx[1] === dd[1] }
+  }
+  return null
+}
+
 // ---------- móveis ----------
+const LOCAL_X = [[1, 0], [0, -1], [-1, 0], [0, 1]]
 export const shelfAccess = (s) => step(s, s.rot || 0)
 export const shelfPoint = (s) => { const [dx, dz] = DIRS[(s.rot || 0) % 4]; return { x: s.x + dx * 0.3, z: s.z + dz * 0.3 } }
+
+// expositor de hortifruti: ilha 2×2 com 4 lugares ou estante de parede 2×1 com 2 lugares, cada um com seu produto; (x, z) é o canto de menor x e z
+// island = pirâmide 2×2 com 4 frentes (cada lugar olha para fora, em cata-vento); wall = estante de parede 2×1 com 2 lugares
+const PRODUCE_BASE = {
+  island: [
+    { slot: 0, dx: 0, dz: 0, face: 2 }, { slot: 1, dx: 1, dz: 0, face: 1 },
+    { slot: 2, dx: 1, dz: 1, face: 0 }, { slot: 3, dx: 0, dz: 1, face: 3 },
+  ],
+  wall: [{ slot: 0, dx: 0, dz: 0, face: 0 }, { slot: 1, dx: 1, dz: 0, face: 0 }], // 2×1, os dois olhando para a frente
+}
+// girar o expositor em 90° (rot + 1) leva o ponto (dx, dz) para (dz, 1 − dx), do mesmo jeito que gira para onde o móvel olha;
+// depois o conjunto é encostado no canto de menor x e z, que é a âncora (x, z), em qualquer giro
+export function produceSlots(x, z, rot = 0, style = 'island') {
+  const st = style === 'wall' ? 'wall' : 'island', r = ((rot % 4) + 4) % 4
+  const cells = PRODUCE_BASE[st].map((b) => {
+    let dx = b.dx, dz = b.dz
+    for (let i = 0; i < r; i++) [dx, dz] = [dz, 1 - dx]
+    return { b, dx, dz }
+  })
+  const mx = Math.min(...cells.map((c) => c.dx)), mz = Math.min(...cells.map((c) => c.dz))
+  return cells.map(({ b, dx, dz }) => ({ slot: b.slot, style: st, x: x + dx - mx, z: z + dz - mz, rot: (b.face + r) % 4, grot: r }))
+}
 export const cashierTile = (r) => step(r, (r.rot || 0) + 2)
 // a prateleira encostada nas costas desta, virada para o lado oposto
 export function backPartner(s, shelves) {
@@ -61,7 +106,16 @@ function flood(plan, blocked, from) {
 }
 
 // null = layout válido; texto = motivo para recusar
+export const isWallDecor = (d) => !!DECOR[d.type]?.wall
 export function checkLayout(plan, { shelves, register, decor, cafe }) {
+  // decoração de parede não ocupa o chão: só precisa estar na parede do fundo e num lugar livre
+  const wall = decor.filter(isWallDecor), seen = new Set()
+  decor = decor.filter((d) => !isWallDecor(d))
+  for (const w of wall) {
+    if (w.x < 0 || w.x >= plan.cols) return 'A parede não vai até aí'
+    if (seen.has(w.x)) return 'Já tem outra decoração de parede aí'
+    seen.add(w.x)
+  }
   const blocked = new Set()
   for (const o of [...(register ? [register] : []), ...(cafe ? [cafe] : []), ...shelves, ...decor]) {
     if (!onFloor(plan, o.x, o.z)) return 'Aí fica fora da área da loja'
@@ -101,16 +155,18 @@ export function settleLayout(plan, { shelves, register, decor, cafe }) {
   const { cols, rows } = dims(plan)
   const single = (list) => list === 'register' || list === 'cafe'
   const fits = (list, c) => !checkLayout(plan, single(list) ? { ...cur, [list]: c } : { ...cur, [list]: [...cur[list], c] })
+  // as prateleiras levam o tipo junto: o canto automático depende de reconhecer as vizinhas
+  const extra = (o) => (o.kind ? { kind: o.kind, fridge: o.fridge, groupId: o.groupId, variant: o.variant } : { variant: o.variant })
   const settle = (list, o) => {
     const rot0 = o.rot || 0
-    let spot = fits(list, { x: o.x, z: o.z, rot: rot0, type: o.type }) ? { x: o.x, z: o.z, rot: rot0 } : null
+    let spot = fits(list, { x: o.x, z: o.z, rot: rot0, type: o.type, ...extra(o) }) ? { x: o.x, z: o.z, rot: rot0 } : null
     if (!spot) {
       const tiles = []
       for (let x = 0; x < cols; x++) for (let z = 0; z < rows; z++) tiles.push({ x, z, d: Math.hypot(x - o.x, z - o.z) })
       tiles.sort((a, b) => a.d - b.d)
       search: for (const t of tiles) for (let r = 0; r < 4; r++) {
         const c = { x: t.x, z: t.z, rot: (rot0 + r) % 4 }
-        if (fits(list, { ...c, type: o.type })) { spot = c; break search }
+        if (fits(list, { ...c, type: o.type, ...extra(o) })) { spot = c; break search }
       }
     }
     if (!spot) return false
@@ -127,19 +183,11 @@ export function settleLayout(plan, { shelves, register, decor, cafe }) {
 
 export const defaultRegister = (plan) => { const d = dims(plan); return { x: d.doorX + 1, z: d.rows - 2, rot: 0 } }
 export const defaultShelves = (plan) => [0, 1, 2].map((i) => ({ x: stockRoom(plan).cols + i, z: 0, rot: 0 }))
+// a maçã é produto inicial: a loja já começa com um expositor de hortifruti em ilha
+export const defaultProduce = (plan) => ({ x: Math.floor(plan.cols / 2), z: 2, rot: 0, style: 'island' })
 export const defaultFreezers = (plan) => [2, 3].map((z) => ({ x: dims(plan).cols - 1, z, rot: 3, fridge: true }))
-export const defaultDecor = (plan) => {
-  const d = dims(plan), out = stockRoom(plan).doorOut
-  return [
-    { type: 'gacha', x: 0, z: d.rows - 3, rot: 1 },
-    { type: 'plant', x: d.cols - 1, z: 1, rot: 0 },
-    { type: 'plant', x: 0, z: d.rows - 1, rot: 0 },
-    { type: 'plant', x: d.cols - 1, z: d.rows - 2, rot: 0 },
-    { type: 'cart', x: d.doorX - 2, z: d.rows - 1, rot: 0 },
-    { type: 'truck', x: out.x, z: out.z + 1, rot: 0 },
-    ...usableDecor(plan),
-  ]
-}
+// o jogo começa sem decoração: só o computador e o rádio, que são usados
+export const defaultDecor = (plan) => usableDecor(plan)
 export const usableDecor = (plan) => [
   { type: 'computer', x: dims(plan).cols - 2, z: 0, rot: 0 },
   { type: 'radio', x: 0, z: stockRoom(plan).rows, rot: 1 },

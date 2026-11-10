@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { PhArchive, PhCheckCircle, PhInfo, PhMoonStars, PhPackage, PhReceipt, PhSun, PhTag, PhTruck, PhWarning, PhWarningCircle } from '@phosphor-icons/vue'
 import { game, ui, stockFull } from '../game/state.js'
+import { onDuty } from '../game/team.js'
 import { world } from '../game/world.js'
 import { PID } from '../game/config.js'
 
@@ -20,7 +21,7 @@ const hint = computed(() => {
     return { icon: PhSun, text: 'Tudo pronto! Vá até a porta para abrir a loja' }
   }
   if (game.phase === 'open' || game.phase === 'closing') {
-    if (world.queue.length && !world.player.cashiering && !game.staff.cashier) return { icon: PhReceipt, text: 'Tem gente na fila! Clique no caixa para atender' }
+    if (world.queue.length && !world.player.cashiering && !onDuty('cashier')) return { icon: PhReceipt, text: 'Tem gente na fila! Clique no caixa para atender' }
     const empty = game.shelves.find((s) => s.product && s.count === 0)
     if (empty) return { icon: PhWarning, text: `${PID[empty.product].name} acabou! Reponha com as caixas do estoque` }
     const unp = game.shelves.find((s) => s.product && s.price == null)
