@@ -23,7 +23,7 @@ import { PhCrosshair } from '@phosphor-icons/vue'
 import MusicPanel from './components/MusicPanel.vue'
 
 const cv = ref(null)
-let raf = 0, rend, autosave = 0
+let raf = 0, rend, autosave = 0, bgWorker = null, bgTimer = 0
 const tip = ref(null)
 const saveIfHidden = () => { if (document.hidden) save() }
 
@@ -55,6 +55,17 @@ onMounted(async () => {
     raf = requestAnimationFrame(loop)
   }
   raf = requestAnimationFrame(loop)
+  // aba em segundo plano: o navegador para o requestAnimationFrame, então a simulação segue por um relógio de Web Worker (não sofre a pausa das abas), sem desenhar
+  const bgStep = () => {
+    if (!document.hidden) { last = performance.now(); return }
+    const now = performance.now()
+    let left = Math.min(5, (now - last) / 1000); last = now
+    while (left > 0) { const dt = Math.min(0.05, left); world.update(dt); left -= dt }
+  }
+  try {
+    bgWorker = new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),250)'], { type: 'text/javascript' })))
+    bgWorker.onmessage = bgStep
+  } catch { bgTimer = setInterval(bgStep, 250) }
   window.__game = { game, ui, world, rend }
   const MAP = { KeyW: 'w', ArrowUp: 'w', KeyA: 'a', ArrowLeft: 'a', KeyS: 's', ArrowDown: 's', KeyD: 'd', ArrowRight: 'd' }
   const typing = (e) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target?.tagName)
@@ -89,6 +100,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
   clearInterval(autosave)
+  clearInterval(bgTimer)
+  bgWorker?.terminate()
   removeEventListener('pagehide', save)
   document.removeEventListener('visibilitychange', saveIfHidden)
 })
