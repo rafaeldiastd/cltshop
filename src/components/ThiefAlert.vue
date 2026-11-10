@@ -15,7 +15,7 @@ import { world } from '../game/world.js'
 </template>
 
 <style scoped>
-.theft { position: fixed; z-index: 12; width: 64px; height: 64px; padding: 5px; border-radius: 50%; transform: translate(-50%, -100%); background: conic-gradient(var(--bad) calc(var(--left) * 360deg), rgba(255, 244, 224, .7) 0); box-shadow: var(--shadow); animation: thump .45s ease-in-out infinite alternate; }
+.theft { position: fixed; z-index: 60; /* o jogo não pausa com telas abertas: o alarme fica por cima delas */ width: 64px; height: 64px; padding: 5px; border-radius: 50%; transform: translate(-50%, -100%); background: conic-gradient(var(--bad) calc(var(--left) * 360deg), rgba(255, 244, 224, .7) 0); box-shadow: var(--shadow); animation: thump .45s ease-in-out infinite alternate; }
 .theft span { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; background: var(--cream); font-size: 28px; }
 @keyframes thump { to { scale: 1.12; } }
 </style>

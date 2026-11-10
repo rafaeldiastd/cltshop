@@ -1,11 +1,15 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { toRaw } from 'vue'
 import { game, ui, money, settings } from './state.js'
 import { world } from './world.js'
 import { PID, DAY_SECONDS } from './config.js'
-import { dims, boxSlots, stockRoom, onFloor, isUsable } from './layout.js'
+import { dims, boxSlots, stockRoom, onFloor, isUsable, backPartner, DIRS, planKey } from './layout.js'
+import { nextPlan } from './build.js'
 import * as assets from './assets.js'
 import { Scenery } from './scenery.js'
+import { checkoutGuide } from './editor.js'
 
 const C = { wood: 0xc9955c, woodDark: 0x9a6a3f, cream: 0xf6e7cf, plum: 0x3b2f4a, teal: 0x6fb3a8, coral: 0xef8a77, mustard: 0xf2c25b, cardboard: 0xc89a63 }
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0, ...o })
@@ -14,6 +18,48 @@ const box = (w, h, d, color, x = 0, y = 0, z = 0) => {
   m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true
   return m
 }
+
+// ---------- desempenho: várias peças simples viram uma malha só, com a cor em cada vértice ----------
+const bakedMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 })
+const bakeable = (m) => m.isMesh && m.visible && m.material.isMeshStandardMaterial && !m.material.transparent && !m.material.map && m.material.side === THREE.FrontSide && m.material.emissive.getHex() === 0
+function colored(m) {
+  const g = m.geometry.clone().applyMatrix4(m.matrixWorld)
+  const n = g.attributes.position.count, cols = new Float32Array(n * 3), c = m.material.color
+  for (let i = 0; i < n; i++) { cols[i * 3] = c.r; cols[i * 3 + 1] = c.g; cols[i * 3 + 2] = c.b }
+  g.setAttribute('color', new THREE.BufferAttribute(cols, 3))
+  return g
+}
+const templates = new Map()
+// mesma peça repetida (prateleira, freezer, caixa): monta uma vez e reaproveita
+function baked(key, build) {
+  if (!templates.has(key)) {
+    const g = new THREE.Group(); build(g); g.updateMatrixWorld(true)
+    const list = []; g.traverse((m) => { if (bakeable(m)) list.push(m) })
+    templates.set(key, mergeGeometries(list.map(colored)))
+  }
+  const m = new THREE.Mesh(templates.get(key), bakedMat); m.castShadow = true; m.receiveShadow = true
+  return m
+}
+// estrutura fixa da loja: filhos diretos do grupo, sem mexer em portas e móveis
+function bakeChildren(group) {
+  group.updateMatrixWorld(true)
+  for (const cast of [true, false]) {
+    const list = group.children.filter((m) => bakeable(m) && m.castShadow === cast)
+    if (list.length < 2) continue
+    const mesh = new THREE.Mesh(mergeGeometries(list.map(colored)), bakedMat); mesh.castShadow = cast; mesh.receiveShadow = true
+    list.forEach((m) => group.remove(m))
+    group.add(mesh)
+  }
+}
+// clique testa uma caixa invisível por objeto em vez de cada triângulo
+const hitGeo = new THREE.BoxGeometry(1, 1, 1), hitMat = new THREE.MeshBasicMaterial()
+function addHit(gr, w, h, d, y = h / 2) {
+  const m = new THREE.Mesh(hitGeo, hitMat); m.scale.set(w, h, d); m.position.y = y; m.visible = false; m.userData.noOutline = true
+  gr.add(m); gr.userData.hit = m
+}
+const UP = new THREE.Vector3(0, 1, 0), ONE = new THREE.Vector3(1, 1, 1)
+const itemAt = (x, y, z, spin = 0) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(UP, spin), ONE)
+const SHADOW_EVERY = 30 // quadros entre atualizações das sombras
 
 // ---------- sprites de texto/emoji ----------
 const texCache = new Map()
@@ -55,6 +101,7 @@ const sprite = (tex, sx, sy) => {
 }
 
 const lerp = (a, b, t) => a + (b - a) * t
+const BACK_SHIFT = 0.25 // metade da profundidade da prateleira
 const KEYS = [ // fração do dia -> cores
   { t: -1,  sky: 0xf7d9b5, sun: 0xffd9a8, si: 2.0, hi: 0.9, lamp: 0.6 },
   { t: 0,   sky: 0xf7d9b5, sun: 0xffd9a8, si: 2.0, hi: 0.9, lamp: 0.6 },
@@ -68,9 +115,12 @@ export class Renderer {
   constructor(canvas) {
     this.canvas = canvas
     this.r = new THREE.WebGLRenderer({ canvas, antialias: true })
-    this.r.setPixelRatio(Math.min(devicePixelRatio, 2))
+    this.r.setPixelRatio(Math.min(devicePixelRatio, 1.5))
     this.r.shadowMap.enabled = true
-    this.r.shadowMap.type = THREE.PCFSoftShadowMap
+    this.r.shadowMap.autoUpdate = false // o sol não se move: as sombras só precisam de atualização de vez em quando
+    this.r.shadowMap.needsUpdate = true
+    this.shadowTick = 0
+    this.r.shadowMap.type = THREE.PCFShadowMap
     this.r.toneMapping = THREE.ACESFilmicToneMapping
     this.r.toneMappingExposure = 1.05
     this.scene = new THREE.Scene()
@@ -91,9 +141,14 @@ export class Renderer {
     this.editTiles = Array.from({ length: 8 }, () => {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(0.94, 0.94), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }))
       m.rotation.x = -Math.PI / 2; m.visible = false; this.scene.add(m)
+      const label = sprite(tagTex('', '#fff'), 1.05, 0.33); label.visible = false; this.scene.add(label)
+      label.material.depthTest = false; label.renderOrder = 10 // o nome aparece mesmo com gente ou móvel na frente
+      m.userData.label = label
       return m
     })
-    this.staticG = null; this.builtLevel = -1
+    this.staticG = null; this.builtKey = ''; this.arrowKey = ''
+    this.tmpColor = new THREE.Color()
+    this.pendingMove = null
     this.ray = new THREE.Raycaster(); this.mouse = new THREE.Vector2()
     this.floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
     this.t = 0
@@ -127,7 +182,7 @@ export class Renderer {
   // ---------- contorno branco do que está selecionado ----------
   // Desenha só os objetos selecionados numa máscara e pinta de branco a faixa logo em volta dela, por cima da cena.
   initOutline() {
-    this.maskRT = new THREE.WebGLRenderTarget(1, 1, { samples: 4 })
+    this.maskRT = new THREE.WebGLRenderTarget(1, 1, { samples: 2 })
     this.maskMat = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false })
     this.outlineMat = new THREE.ShaderMaterial({
       transparent: true, depthTest: false, depthWrite: false,
@@ -156,8 +211,9 @@ export class Renderer {
     const held = ui.held
     return [...new Set([
       mo,
-      held && (held.kind === 'shelf' ? this.shelfViews.get(held.id)?.gr : held.kind === 'decor' ? this.decorViews.get(held.id) : this.counterG),
+      held && (held.kind === 'shelf' ? this.shelfViews.get(held.id)?.gr : held.kind === 'decor' ? this.decorViews.get(held.id) : held.kind === 'cafe' ? this.cafeG : this.counterG),
       ui.panelShelf != null && this.shelfViews.get(ui.panelShelf)?.gr,
+      ui.panelCafe && this.cafeG,
       ui.selectedBox != null && this.boxViews.get(ui.selectedBox)?.gr,
     ])].filter(Boolean)
   }
@@ -171,13 +227,11 @@ export class Renderer {
     r.getClearColor(this.clearColor)
     scene.background = null; scene.overrideMaterial = this.maskMat
     camera.layers.set(1)
-    r.shadowMap.autoUpdate = false
     r.setRenderTarget(this.maskRT)
     r.setClearColor(0x000000, 0); r.clear()
     r.render(scene, camera)
     r.setRenderTarget(null)
     r.setClearColor(this.clearColor, alpha)
-    r.shadowMap.autoUpdate = true
     camera.layers.set(0)
     scene.background = bg; scene.overrideMaterial = null
     meshes.forEach((m) => m.layers.disable(1))
@@ -187,7 +241,7 @@ export class Renderer {
   }
 
   frame() {
-    const d = dims(game.level)
+    const d = dims(game.plan)
     const c = new THREE.Vector3(d.cols / 2 - 0.5, 0, d.rows / 2 + 0.5)
     this.controls.target.copy(c); this.base = c.clone(); this.follow = c.clone()
     const dist = 8 + d.cols * 1.35
@@ -203,8 +257,8 @@ export class Renderer {
     this.lamps = []
     this.doors = []
     this.signKey = null
-    const { cols, rows, doorX } = dims(game.level)
-    this.builtLevel = game.level
+    const { cols, rows, doorX } = dims(game.plan)
+    this.builtKey = planKey(game.plan)
 
     // chão com tijolinhos de madeira
     const cv = document.createElement('canvas'); cv.width = cols * 64; cv.height = rows * 64
@@ -221,7 +275,7 @@ export class Renderer {
     // grade do modo layout
     const pts = []
     for (let x = 0; x < cols; x++) for (let z = 0; z < rows; z++) {
-      if (!onFloor(game.level, x, z)) continue
+      if (!onFloor(game.plan, x, z)) continue
       const a = x - 0.5, b = x + 0.5, c = z - 0.5, d = z + 0.5, y = 0.025
       pts.push(a, y, c, b, y, c, b, y, c, b, y, d, b, y, d, a, y, d, a, y, d, a, y, c)
     }
@@ -233,7 +287,7 @@ export class Renderer {
     const wallC = 0xf2dcc0, trim = 0xb98a5a
 
     // sala do estoque: piso próprio, paredes baixas para enxergar as caixas e porta na parede direita
-    const room = stockRoom(game.level)
+    const room = stockRoom(game.plan)
     const roomFloor = new THREE.Mesh(new THREE.PlaneGeometry(room.cols, room.rows), std(0xb7c9b0))
     roomFloor.rotation.x = -Math.PI / 2; roomFloor.position.set((room.cols - 1) / 2, 0.012, (room.rows - 1) / 2); roomFloor.receiveShadow = true; g.add(roomFloor)
     const H = 0.85, T = 0.14
@@ -261,7 +315,7 @@ export class Renderer {
     const doorG = (this.doorG = new THREE.Group()); doorG.userData = { kind: 'door' }
     for (const dx of [-0.5, 0.5]) doorG.add(box(0.14, 1.4, 0.34, trim, doorX + dx, 0.7, rows))
     this.addDoor(doorG, doorX - 0.43, rows, 'x', 0.86, 1.3, 0x6fb3a8, -1.7)
-    const doorHit = box(1.2, 2.1, 0.5, trim, doorX, 1.05, rows); doorHit.visible = false; doorG.add(doorHit)
+    const doorHit = box(1.2, 2.1, 0.5, trim, doorX, 1.05, rows); doorHit.visible = false; doorG.add(doorHit); doorG.userData.hit = doorHit
     this.doorSign = sprite(tagTex('FECHADO', '#f4a09a'), 1.5, 0.47); this.doorSign.position.set(doorX, 1.75, rows); doorG.add(this.doorSign)
     g.add(doorG)
     const mat = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.8), std(C.coral)); mat.rotation.x = -Math.PI / 2; mat.position.set(doorX, 0.012, rows - 0.2); g.add(mat)
@@ -282,6 +336,7 @@ export class Renderer {
     const lampGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex(), transparent: true, depthWrite: false, opacity: 0, toneMapped: false }))
     lampGlow.scale.set(0.75, 0.75, 1); lampGlow.position.copy(lamp.position)
     counter.add(lamp, lampGlow)
+    addHit(counter, 1, 1.5, 0.82, 0.75)
     this.regLamp = { lamp, glow: lampGlow, key: null }
     g.add(counter); this.counterG = counter
 
@@ -295,9 +350,11 @@ export class Renderer {
       g.add(bulb, pl); this.lamps.push(pl)
     }
     this.decorate(g, cols, rows, doorX)
+    bakeChildren(g)
     this.scenery.build({ cols, rows, doorX })
     this.scene.add(g)
     this.frame()
+    this.r.shadowMap.needsUpdate = true
   }
 
   decorate(g, cols, rows, doorX) {
@@ -340,24 +397,59 @@ export class Renderer {
   // ---------- objetos dinâmicos ----------
   makeShelfView(s) {
     const gr = new THREE.Group(); gr.userData = { kind: 'shelf', id: s.id }
-    const sm = assets.make(s.fridge ? 'chest' : 'shelf')
-    if (sm) gr.add(sm)
-    else if (s.fridge) { gr.add(box(0.9, 0.4, 0.6, 0xe8eef4, 0, 0.2, 0)); gr.add(box(0.84, 0.02, 0.54, 0x9fd0e0, 0, 0.41, 0)) }
-    else {
-      gr.add(box(0.06, 1.05, 0.46, C.woodDark, -0.45, 0.525, 0)); gr.add(box(0.06, 1.05, 0.46, C.woodDark, 0.45, 0.525, 0))
-      gr.add(box(0.9, 1.05, 0.04, C.wood, 0, 0.525, -0.21))
-      for (const y of [0.05, 0.4, 0.72, 1.04]) gr.add(box(0.96, 0.05, 0.5, C.wood, 0, y, 0))
-    }
+    gr.add(s.fridge ? this.makeFreezerModel() : baked('shelf', (g) => {
+      g.add(box(0.06, 1.05, 0.46, C.woodDark, -0.45, 0.525, 0)); g.add(box(0.06, 1.05, 0.46, C.woodDark, 0.45, 0.525, 0))
+      g.add(box(0.9, 1.05, 0.04, C.wood, 0, 0.525, -0.21))
+      for (const y of [0.05, 0.4, 0.72, 1.04]) g.add(box(0.96, 0.05, 0.5, C.wood, 0, y, 0))
+    }))
     const items = new THREE.Group(); gr.add(items)
     const label = sprite(tagTex('—', '#cfc6b8'), 0.95, 0.3); label.position.set(0, s.fridge ? 0.95 : 1.35, 0.05); gr.add(label)
+    if (s.fridge) addHit(gr, 0.96, 0.6, 0.72); else addHit(gr, 0.98, 1.15, 0.54)
     this.scene.add(gr)
-    return { gr, items, label, key: '', pid: null, slots: [], fridge: !!s.fridge }
+    return { gr, items, label, key: '', pid: null, inst: [], fridge: !!s.fridge }
   }
   // coloca o móvel no lugar salvo, ou na posição da mão se estiver sendo movido
   place(gr, kind, o) {
     const h = ui.held, q = h && h.kind === kind && (kind === 'counter' || h.id === o.id) ? h : o
     gr.position.set(q.x, q === h ? 0.1 : 0, q.z)
     gr.rotation.y = ((q.rot || 0) * Math.PI) / 2
+  }
+  // freezer horizontal aberto por dentro, com tampa de vidro (o modelo pronto é um bloco fechado)
+  makeFreezerModel() {
+    const body = 0xe8eef4, trim = 0x8fa6b8
+    const shell = baked('freezer', (g) => {
+      g.add(box(0.92, 0.07, 0.66, 0xbcd7e6, 0, 0.035, 0))
+      for (const z of [-0.305, 0.305]) { g.add(box(0.92, 0.42, 0.05, body, 0, 0.21, z)); g.add(box(0.96, 0.03, 0.08, trim, 0, 0.435, z)) }
+      for (const x of [-0.435, 0.435]) { g.add(box(0.05, 0.42, 0.56, body, x, 0.21, 0)); g.add(box(0.08, 0.03, 0.66, trim, x, 0.435, 0)) }
+      g.add(box(0.03, 0.02, 0.58, trim, 0, 0.44, 0))
+    })
+    this.glassGeo ||= new THREE.BoxGeometry(0.84, 0.01, 0.56)
+    this.glassMat ||= new THREE.MeshStandardMaterial({ color: 0xdff1f8, transparent: true, opacity: 0.16, roughness: 0.1, depthWrite: false })
+    const glass = new THREE.Mesh(this.glassGeo, this.glassMat)
+    glass.position.y = 0.44
+    const g = new THREE.Group(); g.add(shell, glass)
+    return g
+  }
+  // cafeteria: balcão com máquina de café e vitrine de doces
+  makeCafeView(id) {
+    const g = new THREE.Group(); g.userData = { kind: 'cafe', id }
+    g.add(box(0.94, 0.8, 0.72, 0x7a5a3a, 0, 0.4, 0)); g.add(box(1, 0.06, 0.78, C.cream, 0, 0.83, 0))
+    const machine = new THREE.Group(); machine.position.set(-0.24, 0.86, -0.1)
+    machine.add(box(0.36, 0.34, 0.26, 0xb9c2cc, 0, 0.17, 0)); machine.add(box(0.38, 0.05, 0.28, C.plum, 0, 0.36, 0)); machine.add(box(0.3, 0.04, 0.14, C.plum, 0, 0.03, 0.17))
+    for (const x of [-0.08, 0.08]) { const head = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.08, 10), std(C.plum)); head.position.set(x, 0.2, 0.15); head.castShadow = true; machine.add(head) }
+    g.add(machine)
+    const cup = assets.make('cupCoffee'); if (cup) { cup.position.set(-0.3, 1.26, -0.1); g.add(cup) }
+    const shop = new THREE.Group(); shop.position.set(0.24, 0.86, 0.08)
+    shop.add(box(0.42, 0.03, 0.46, C.woodDark, 0, 0.015, 0))
+    const croissant = assets.make('croissant'); if (croissant) { croissant.position.set(-0.1, 0.03, -0.1); shop.add(croissant) }
+    const pie = assets.make('pie'); if (pie) { pie.position.set(0.1, 0.03, -0.08); shop.add(pie) }
+    for (const [x, z] of [[-0.12, 0.1], [-0.03, 0.12], [0.06, 0.1], [0.14, 0.13]]) { const bread = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), std(0xe6b866)); bread.position.set(x, 0.07, z); bread.castShadow = true; shop.add(bread) }
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.24, 0.46), new THREE.MeshStandardMaterial({ color: 0xdff1f8, transparent: true, opacity: 0.16, roughness: 0.1, depthWrite: false }))
+    glass.position.y = 0.15; shop.add(glass)
+    g.add(shop)
+    addHit(g, 1, 1.3, 0.82, 0.65)
+    this.scene.add(g)
+    return g
   }
   makeDecorView(d) {
     const gr = new THREE.Group(); gr.userData = { kind: 'decor', id: d.id }
@@ -386,10 +478,16 @@ export class Renderer {
         head.add(box(0.2, 0.18, 0.42, 0xe8eef4, 0, 0, 0)); head.add(box(0.14, 0.12, 0.05, C.plum, 0, 0, 0.23))
         const led = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 6), new THREE.MeshBasicMaterial({ color: 0xe5352b, toneMapped: false })); led.position.set(0.06, 0.1, 0.12); head.add(led)
         model.add(head)
+      } else if (d.type === 'cafeTable') { // mesinha redonda com dois banquinhos
+        const round = (rt, rb, h, color, x, y, z) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 18), std(color)); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; model.add(m) }
+        round(0.28, 0.28, 0.04, C.cream, 0, 0.62, 0); round(0.03, 0.03, 0.6, C.plum, 0, 0.31, 0); round(0.14, 0.16, 0.03, C.plum, 0, 0.015, 0)
+        for (const x of [-0.36, 0.36]) { round(0.11, 0.11, 0.04, C.coral, x, 0.38, 0); round(0.025, 0.025, 0.36, C.plum, x, 0.18, 0) }
       }
       else model.add(box(0.5, 0.7, 0.5, C.teal, 0, 0.35, 0))
     }
     gr.add(model)
+    const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3())
+    addHit(gr, Math.max(0.5, Math.min(1, size.x)), Math.max(0.5, size.y), Math.max(0.5, Math.min(1, size.z)))
     this.scene.add(gr)
     return gr
   }
@@ -406,6 +504,10 @@ export class Renderer {
       }
     }
     if (this.counterG) this.place(this.counterG, 'counter', game.register)
+    if (game.cafe) {
+      if (!this.cafeG) this.cafeG = this.makeCafeView(game.cafe.id)
+      this.place(this.cafeG, 'cafe', game.cafe)
+    } else if (this.cafeG) { this.scene.remove(this.cafeG); this.cafeG = null }
   }
   syncDoors(dt) {
     for (const d of this.doors) {
@@ -414,7 +516,7 @@ export class Renderer {
     }
     if (this.doorSign && this.signKey !== game.phase) {
       this.signKey = game.phase
-      const [text, bg] = game.phase === 'open' ? ['ABERTO', '#b9e4c4'] : game.phase === 'closing' ? ['FECHANDO', '#f8dfa2'] : ['FECHADO', '#f4a09a']
+      const [text, bg] = game.phase === 'open' ? ['ABERTO', '#b9e4c4'] : game.phase === 'closing' ? ['FECHANDO', '#f8dfa2'] : game.phase === 'lunch' ? ['ALMOÇO', '#f8dfa2'] : ['FECHADO', '#f4a09a']
       this.doorSign.material.map = tagTex(text, bg); this.doorSign.material.needsUpdate = true
     }
   }
@@ -439,38 +541,93 @@ export class Renderer {
   }
   syncEditor() {
     if (this.gridG) this.gridG.visible = ui.editing
-    const list = ui.held?.preview || []
+    // com nada na mão, o modo layout mostra onde fica a fila do caixa atual
+    const list = ui.held?.preview || (ui.editing && game.register ? checkoutGuide(game.register, world.queueTiles) : [])
     this.editTiles.forEach((m, i) => {
-      const t = list[i]
+      const t = list[i], label = m.userData.label
       m.visible = !!t
+      label.visible = !!t?.label
       if (t) { m.position.set(t.x, 0.03, t.z); m.material.color.setHex(t.c); m.material.opacity = t.o }
+      if (t?.label) {
+        label.position.set(t.x, 0.42, t.z)
+        if (m.userData.text !== t.label) { m.userData.text = t.label; label.material.map = tagTex(t.label, '#3b2f4a', '#fff4e0'); label.material.needsUpdate = true }
+      }
     })
   }
-  fillShelfItems(v, pid) {
-    v.items.clear(); v.slots = []
-    if (!pid) return
-    if (v.fridge) { // arrumados por cima, em duas camadas, para aparecerem na câmera
-      for (let layer = 0; layer < 2; layer++) for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) {
-        const it = assets.makeItem(pid); it.position.set(-0.27 + c * 0.18, 0.4 + layer * 0.13, -0.17 + r * 0.17); it.rotation.y = (Math.random() - 0.5) * 0.5
-        v.items.add(it); v.slots.push(it)
+  // modo construção: área nova em verde, estoque em amarelo e a posição na tela dos controles de cada parede
+  syncBuild() {
+    if (!this.buildFloor) {
+      const geo = new THREE.PlaneGeometry(1, 1)
+      const make = (color, opacity) => {
+        const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, opacity, transparent: true, depthWrite: false }))
+        m.rotation.x = -Math.PI / 2; m.visible = false; this.scene.add(m)
+        return m
       }
+      this.buildFloor = [0, 1, 2, 3].map(() => make(0x7fd6a8, 0.6))
+      this.buildRoom = make(0xf2c25b, 0.5)
+    }
+    const b = ui.build
+    if (!b) {
+      for (const m of [...this.buildFloor, this.buildRoom]) m.visible = false
+      if (ui.buildArrows.length) { ui.buildArrows = []; this.arrowKey = '' }
       return
     }
-    const boards = [0.075, 0.425, 0.745]
-    for (const y of boards) for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) {
-      const it = assets.makeItem(pid); it.position.set(-0.3 + c * 0.2, y, r ? 0.09 : -0.08); it.rotation.y = (Math.random() - 0.5) * 0.5
-      v.items.add(it); v.slots.push(it)
+    const area = (m, x0, z0, x1, z1) => {
+      m.visible = x1 > x0 && z1 > z0
+      if (m.visible) { m.position.set((x0 + x1) / 2, 0.05, (z0 + z1) / 2); m.scale.set(x1 - x0, z1 - z0, 1) }
     }
+    const { cols, rows } = game.plan, st = nextPlan(b).stock
+    const x0 = -0.5 - b.w, x1 = cols - 0.5 + b.e, z0 = -0.5 - b.n, z1 = rows - 0.5 + b.s
+    const [west, east, back, front] = this.buildFloor
+    area(west, x0, z0, -0.5, z1); area(east, cols - 0.5, z0, x1, z1); area(back, -0.5, z0, cols - 0.5, -0.5); area(front, -0.5, rows - 0.5, cols - 0.5, z1)
+    area(this.buildRoom, x0, z0, x0 + st.cols, z0 + st.rows)
+    const r = this.canvas.getBoundingClientRect(), v = new THREE.Vector3()
+    const midX = (x0 + x1) / 2, midZ = (z0 + z1) / 2
+    const list = [
+      ['w', x0 - 0.6, midZ], ['e', x1 + 0.6, midZ], ['n', midX, z0 - 0.6], ['s', midX, z1 + 0.6],
+      ['stockCols', x0 + st.cols, z0 + st.rows / 2], ['stockRows', x0 + st.cols / 2, z0 + st.rows],
+    ].map(([wall, x, z]) => {
+      v.set(x, 0.9, z).project(this.camera)
+      return { wall, x: Math.round(Math.max(80, Math.min(r.width - 80, r.left + ((v.x + 1) / 2) * r.width))), y: Math.round(Math.max(90, Math.min(r.height - 200, r.top + ((1 - v.y) / 2) * r.height))) }
+    })
+    // se dois controles se encostam (tela estreita, paredes próximas), o de depois desce
+    list.forEach((a, i) => { for (const o of list.slice(0, i)) if (Math.abs(a.x - o.x) < 100 && Math.abs(a.y - o.y) < 36) a.y = o.y + 36 })
+    const key = list.map((a) => a.x + ',' + a.y).join(';')
+    if (key !== this.arrowKey) { this.arrowKey = key; ui.buildArrows = list }
+  }
+  fillShelfItems(v, pid) {
+    for (const m of v.inst) m.dispose()
+    v.items.clear(); v.inst = []
+    if (!pid) return
+    const spin = () => (Math.random() - 0.5) * 0.5, slots = []
+    if (v.fridge) { // dentro do freezer, em duas camadas abaixo do vidro
+      for (let layer = 0; layer < 2; layer++) for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) slots.push(itemAt(-0.3 + c * 0.2, 0.08 + layer * 0.14, -0.18 + r * 0.18, spin()))
+    } else {
+      for (const y of [0.075, 0.425, 0.745]) for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) slots.push(itemAt(-0.3 + c * 0.2, y, r ? 0.09 : -0.08, spin()))
+    }
+    const g = assets.makeItemInstances(pid, slots)
+    v.items.add(g); v.inst = g.children
   }
   syncShelves(dt) {
-    const alive = new Set(game.shelves.map((s) => s.id))
-    for (const [id, v] of this.shelfViews) if (!alive.has(id)) { this.scene.remove(v.gr); this.shelfViews.delete(id) }
-    for (const s of game.shelves) {
+    const shelves = toRaw(game.shelves)
+    const alive = new Set(shelves.map((s) => s.id))
+    for (const [id, v] of this.shelfViews) if (!alive.has(id)) { for (const m of v.inst) m.dispose(); this.scene.remove(v.gr); this.shelfViews.delete(id) }
+    // inclui a prateleira na mão, para já mostrar a união ao posicionar
+    const held = ui.held?.kind === 'shelf' ? toRaw(ui.held) : null
+    const poses = shelves.map((s) => (held?.id === s.id ? { ...s, x: held.x, z: held.z, rot: held.rot } : s))
+    const atTile = new Map(poses.map((p) => [p.x + ',' + p.z, p]))
+    for (const [i, s] of shelves.entries()) {
       let v = this.shelfViews.get(s.id)
       if (!v) { v = this.makeShelfView(s); this.shelfViews.set(s.id, v) }
       this.place(v.gr, 'shelf', s)
+      // de costas uma para a outra, encostam no meio; a etiqueta segue no centro do lugar
+      const [dx, dz] = DIRS[((poses[i].rot || 0) + 2) % 4]
+      const behind = atTile.get(poses[i].x + dx + ',' + (poses[i].z + dz))
+      const joined = !s.fridge && behind && backPartner(poses[i], [behind])
+      if (joined) { v.gr.position.x += dx * BACK_SHIFT; v.gr.position.z += dz * BACK_SHIFT }
+      v.label.position.z = joined ? 0.05 + BACK_SHIFT : 0.05
       if (v.pid !== s.product) { v.pid = s.product; this.fillShelfItems(v, s.product) }
-      v.slots.forEach((it, i) => (it.visible = i < s.count))
+      for (const m of v.inst) m.count = Math.min(s.count, m.instanceMatrix.count)
       const k = `${s.product}|${s.price}|${s.count}`
       if (k !== v.key) {
         v.key = k
@@ -486,26 +643,25 @@ export class Renderer {
   }
   makeBoxView(b) {
     const gr = new THREE.Group(); gr.userData = { kind: 'box', id: b.id }
-    const closed = assets.make('box') || (() => { const g = new THREE.Group(); g.add(box(0.6, 0.4, 0.48, C.cardboard, 0, 0.2, 0)); g.add(box(0.14, 0.41, 0.49, 0xe6c590, 0, 0.2, 0)); return g })()
-    const open = assets.make('boxOpen') || (() => {
-      const g = new THREE.Group(); g.add(box(0.6, 0.36, 0.48, C.cardboard, 0, 0.18, 0))
+    const closed = baked('boxClosed', (g) => { g.add(box(0.6, 0.4, 0.48, C.cardboard, 0, 0.2, 0)); g.add(box(0.14, 0.41, 0.49, 0xe6c590, 0, 0.2, 0)) })
+    const open = baked('boxOpen', (g) => {
+      g.add(box(0.6, 0.36, 0.48, C.cardboard, 0, 0.18, 0))
       for (const [dz, rx] of [[-0.26, 0.9], [0.26, -0.9]]) { const f = box(0.6, 0.02, 0.24, 0xb98a55, 0, 0.42, dz); f.rotation.x = rx; g.add(f) }
-      return g
-    })()
+    })
     const peek = new THREE.Group(); open.add(peek)
     gr.add(closed, open)
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.52, 24), new THREE.MeshBasicMaterial({ color: 0xffd35a, side: THREE.DoubleSide, transparent: true }))
-    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.02; ring.visible = false; gr.add(ring)
     const label = sprite(tagTex('', '#fff'), 0.8, 0.25); label.position.y = 0.85; gr.add(label)
+    addHit(gr, 0.66, 0.5, 0.56)
     gr.position.set(0, 0, 0)
     this.scene.add(gr)
-    return { gr, closed, open, peek, peekPid: null, ring, label, key: '', inited: false }
+    return { gr, closed, open, peek, peekPid: null, label, key: '', inited: false }
   }
   syncBoxes(dt) {
-    const alive = new Set(game.boxes.map((b) => b.id))
+    const boxes = toRaw(game.boxes)
+    const alive = new Set(boxes.map((b) => b.id))
     for (const [id, v] of this.boxViews) if (!alive.has(id)) { this.scene.remove(v.gr); this.boxViews.delete(id) }
-    const slots = boxSlots(game.boxes, game.level)
-    for (const b of game.boxes) {
+    const slots = boxSlots(boxes, game.plan)
+    for (const b of boxes) {
       let v = this.boxViews.get(b.id)
       if (!v) { v = this.makeBoxView(b); this.boxViews.set(b.id, v) }
       const p = slots.get(b.id)
@@ -520,10 +676,11 @@ export class Renderer {
       v.closed.visible = !isOpen; v.open.visible = isOpen
       if (v.peekPid !== b.product) { // a caixa pode trocar de conteúdo: mostra o produto atual
         v.peekPid = b.product
+        v.peek.traverse((o) => o.isInstancedMesh && o.dispose())
         v.peek.clear()
-        if (b.product) for (let i = 0; i < 4; i++) { const it = assets.makeItem(b.product); it.position.set(-0.17 + (i % 2) * 0.34, 0.3, i > 1 ? 0.08 : -0.08); v.peek.add(it) }
+        if (b.product) v.peek.add(assets.makeItemInstances(b.product, [0, 1, 2, 3].map((i) => itemAt(-0.17 + (i % 2) * 0.34, 0.3, i > 1 ? 0.08 : -0.08))))
       }
-      v.ring.visible = false; v.gr.scale.setScalar(sel ? 0.8 : 1)
+      v.gr.scale.setScalar(sel ? 0.8 : 1)
       const k = `${b.product}|${b.count}|${b.state}`
       if (k !== v.key) {
         v.key = k
@@ -537,15 +694,14 @@ export class Renderer {
     const gr = new THREE.Group()
     const hue = a.hue ?? 0.5
     const shirt = a.kind === 'player' ? C.coral : a.kind === 'staff' ? (a.role === 'cashier' ? C.mustard : C.teal) : new THREE.Color().setHSL(hue, 0.45, 0.68).getHex()
-    const ch = a.kind === 'pet' ? assets.makeAnim(a.species) : assets.makeCharacter(a.kind === 'player' ? settings.character : 0)
+    const ch = a.kind === 'pet' ? assets.makeAnim(a.species) : a.kind === 'player' ? assets.makeCharacter(settings.character) : assets.makeNpc(a.kind === 'staff', a.hue ?? Math.random())
     const body = new THREE.Group(); gr.add(body)
     let mixer = null, clips = {}
     if (ch) {
-      ch.obj.traverse((o) => { if (o.isMesh) { o.castShadow = true } })
       if (a.kind === 'player') assets.putHat(ch.obj, settings.hat, settings.hatColor)
-      else if (a.kind === 'staff') assets.putHat(ch.obj, 'cap', a.role === 'cashier' ? '#f2c25b' : '#6fb3a8')
+      else if (a.kind === 'staff') assets.putHat(ch.obj, 'cap', a.role === 'cashier' ? '#f2c25b' : a.role === 'barista' ? '#ef8a77' : '#6fb3a8')
       else if (a.thief) assets.putHat(ch.obj, 'beanie', '#3b2f4a')
-      else if (a.kind === 'customer') assets.putHat(ch.obj, ...assets.npcLook(hue))
+      ch.obj.traverse((o) => { if (o.isMesh) o.castShadow = false }) // quem anda usa a sombra redonda no chão
       body.add(ch.obj)
       if (ch.animations.length) {
         mixer = new THREE.AnimationMixer(ch.obj)
@@ -568,7 +724,7 @@ export class Renderer {
     const tag = sprite(tagTex('', '#b9e4c4'), 1.05, 0.33); tag.visible = false; gr.add(tag)
     if (a.kind === 'pet') { // área de clique maior que o bichinho
       Object.assign(gr.userData, { kind: 'pet', id: a.id })
-      const hit = box(0.8, 0.8, 0.8, C.cream, 0, 0.4, 0); hit.visible = false; hit.castShadow = false; gr.add(hit)
+      addHit(gr, 0.8, 0.8, 0.8)
     }
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.22, 14), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18 }))
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.01; shadow.userData.noOutline = true; gr.add(shadow)
@@ -613,13 +769,13 @@ export class Renderer {
 
   // ---------- horário do dia ----------
   applyTime() {
-    let f = game.phase === 'open' ? game.clock / DAY_SECONDS : game.phase === 'closing' ? 0.97 : game.phase === 'night' ? 1.5 : 0
+    let f = game.phase === 'open' || game.phase === 'lunch' ? game.clock / DAY_SECONDS : game.phase === 'closing' ? 0.97 : game.phase === 'night' ? 1.5 : 0
     let a = KEYS[0], b = KEYS[1]
     for (let i = 0; i < KEYS.length - 1; i++) if (f >= KEYS[i].t && f <= KEYS[i + 1].t) { a = KEYS[i]; b = KEYS[i + 1] }
     const k = b.t === a.t ? 0 : (f - a.t) / (b.t - a.t)
-    const col = new THREE.Color(a.sky).lerp(new THREE.Color(b.sky), k)
-    this.scene.background.copy(col); this.scene.fog.color.copy(col)
-    this.sun.color.copy(new THREE.Color(a.sun).lerp(new THREE.Color(b.sun), k))
+    this.scene.background.setHex(a.sky).lerp(this.tmpColor.setHex(b.sky), k)
+    this.scene.fog.color.copy(this.scene.background)
+    this.sun.color.setHex(a.sun).lerp(this.tmpColor.setHex(b.sun), k)
     this.sun.intensity = lerp(a.si, b.si, k); this.hemi.intensity = lerp(a.hi, b.hi, k)
     const lamp = lerp(a.lamp, b.lamp, k)
     this.lamps.forEach((l) => (l.intensity = lamp * 14)); this.lampLevel = Math.max(0, lamp - 0.7)
@@ -636,28 +792,29 @@ export class Renderer {
     })
     c.addEventListener('pointermove', (e) => {
       ui.mouse.x = e.clientX; ui.mouse.y = e.clientY
-      this.hover = this.pick(e)
-      this.onHover?.(this.hover)
+      this.pendingMove = e // processado uma vez por quadro, por mais eventos que o mouse dispare
     })
-    c.addEventListener('pointerleave', () => { this.hover = null; this.onHover?.(null) })
+    c.addEventListener('pointerleave', () => { this.pendingMove = null; this.hover = null; this.onHover?.(null) })
   }
   pick(e) {
+    if (ui.build) return null // durante a obra os cliques são dos controles das paredes
     const r = this.canvas.getBoundingClientRect()
     this.mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1)
     this.ray.setFromCamera(this.mouse, this.camera)
     // com um móvel na mão só interessa o chão; fora do modo layout a decoração não é clicável
     if (!(ui.editing && ui.held)) {
-      const roots = [...this.shelfViews.values()].map((v) => v.gr)
-      if (this.counterG) roots.push(this.counterG)
-      if (ui.editing) roots.push(...this.decorViews.values())
+      const hits = []
+      const add = (g) => { if (g?.userData.hit) hits.push(g.userData.hit) }
+      for (const v of this.shelfViews.values()) add(v.gr)
+      add(this.counterG); add(this.cafeG)
+      if (ui.editing) for (const g of this.decorViews.values()) add(g)
       else {
-        roots.push(...[...this.boxViews.values()].map((v) => v.gr))
-        if (this.doorG) roots.push(this.doorG)
-        for (const p of world.pets) { const v = this.actorViews.get(p.id); if (v) roots.push(v.gr) }
-        for (const d of game.decor) if (isUsable(d) && this.decorViews.has(d.id)) roots.push(this.decorViews.get(d.id))
+        for (const v of this.boxViews.values()) add(v.gr)
+        add(this.doorG)
+        for (const p of world.pets) add(this.actorViews.get(p.id)?.gr)
+        for (const d of toRaw(game.decor)) if (isUsable(d)) add(this.decorViews.get(d.id))
       }
-      for (const h of this.ray.intersectObjects(roots, true)) {
-        if (h.object.isSprite) continue
+      for (const h of this.ray.intersectObjects(hits, false)) {
         let o = h.object
         while (o && !o.userData.kind) o = o.parent
         if (o) return { kind: o.userData.kind, id: o.userData.id, obj: o }
@@ -687,7 +844,7 @@ export class Renderer {
       if (Math.hypot(f.x - t.x, f.z - t.z) < 0.05) ui.recenter = false
     }
     // limite para não perder a loja de vista
-    const { cols, rows } = dims(game.level), mx = cols * 0.8, mz = rows * 0.8
+    const { cols, rows } = dims(game.plan), mx = cols * 0.8, mz = rows * 0.8
     const ox = t.x - f.x, oz = t.z - f.z
     this.shiftView(Math.max(-mx, Math.min(mx, ox)) - ox, Math.max(-mz, Math.min(mz, oz)) - oz)
     this.controls.enablePan = !ui.held // com um móvel na mão, o mouse é do móvel
@@ -698,21 +855,30 @@ export class Renderer {
 
   update(dt) {
     this.t += dt
-    if (this.builtLevel !== game.level) this.buildShop()
+    if (this.builtKey !== planKey(game.plan)) this.buildShop()
+    if (this.pendingMove) {
+      const e = this.pendingMove
+      this.pendingMove = null
+      this.hover = this.pick(e)
+      this.onHover?.(this.hover)
+    }
+    this.shadowTick = (this.shadowTick + 1) % (ui.held ? 3 : SHADOW_EVERY)
+    if (!this.shadowTick) this.r.shadowMap.needsUpdate = true
     this.syncShelves(dt); this.syncDecor(); this.syncBoxes(dt); this.syncActors(dt); this.syncDoors(dt); this.syncLamp(); this.syncEditor()
     this.applyTime()
     this.syncTheft()
     const h = this.hover
     let mo = h && h.obj && !ui.modal ? h.obj : null
     const tg = world.target
-    if (!mo && tg) mo = tg.kind === 'box' ? this.boxViews.get(tg.id)?.gr : tg.kind === 'shelf' ? this.shelfViews.get(tg.id)?.gr : tg.kind === 'counter' ? this.counterG : tg.kind === 'door' ? this.doorG : tg.kind === 'pet' ? this.actorViews.get(tg.id)?.gr : tg.kind === 'decor' ? this.decorViews.get(tg.id) : null
+    if (!mo && tg) mo = tg.kind === 'box' ? this.boxViews.get(tg.id)?.gr : tg.kind === 'shelf' ? this.shelfViews.get(tg.id)?.gr : tg.kind === 'counter' ? this.counterG : tg.kind === 'door' ? this.doorG : tg.kind === 'cafe' ? this.cafeG : tg.kind === 'pet' ? this.actorViews.get(tg.id)?.gr : tg.kind === 'decor' ? this.decorViews.get(tg.id) : null
     const selection = this.selectedObjects(mo)
     this.updateCamera(dt)
+    this.syncBuild()
     // relógio da parede + cenário animado
-    const hh = 9 + (game.phase === 'open' ? (game.clock / DAY_SECONDS) * 12 : game.phase === 'prep' ? -0.5 : game.phase === 'night' ? 12 : 12)
+    const hh = 9 + (game.phase === 'open' || game.phase === 'lunch' ? (game.clock / DAY_SECONDS) * 12 : game.phase === 'prep' ? -0.5 : game.phase === 'night' ? 12 : 12)
     const hi = Math.floor(hh), mi = Math.floor((hh % 1) * 60 / 5) * 5
     if (this.clock && this.clockKey !== hi * 100 + mi) { this.clockKey = hi * 100 + mi; this.clock.material.map = this.clockTex(hi, mi); this.clock.material.needsUpdate = true }
-    const dayF = game.phase === 'open' ? Math.sin(Math.min(1, game.clock / DAY_SECONDS) * Math.PI) * 0.9 + 0.1 : game.phase === 'prep' ? 0.5 : game.phase === 'closing' ? 0.15 : 0
+    const dayF = game.phase === 'open' || game.phase === 'lunch' ? Math.sin(Math.min(1, game.clock / DAY_SECONDS) * Math.PI) * 0.9 + 0.1 : game.phase === 'prep' ? 0.5 : game.phase === 'closing' ? 0.15 : 0
     this.scenery.update(dt, dayF, this.lampLevel || 0)
     this.r.render(this.scene, this.camera)
     this.renderOutline(selection)

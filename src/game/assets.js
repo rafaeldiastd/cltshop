@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { clone as skClone } from 'three/examples/jsm/utils/SkeletonUtils.js'
-import { PRODUCTS, PID, DECOR } from './config.js'
+import { PRODUCTS, PID, DECOR, PETS } from './config.js'
 
 // Coloque os .glb da Kenney em public/assets/kenney/{furniture,food,characters}.
 // Se um arquivo não existir, o jogo usa um modelo procedural no lugar.
@@ -9,7 +9,18 @@ const BASE = '/assets/kenney/'
 const MANIFEST = {
   register: { urls: ['shop/cash-register.glb'], fit: { w: 0.78 } },
   basket:   { urls: ['shop/shopping-basket.glb'], fit: { s: 0.4 } },
-  chest:    { urls: ['shop/freezer.glb'], fit: { w: 0.94 } },
+  cupCoffee: { urls: ['food/cup-coffee.glb'], fit: { s: 0.14 } },
+  croissant: { urls: ['food/croissant.glb'], fit: { s: 0.15 } },
+  pie:      { urls: ['food/pie.glb'], fit: { s: 0.17 } },
+  arcade:   { urls: ['arcade/arcade-machine.glb'], fit: { h: 1.25 } },
+  pinball:  { urls: ['arcade/pinball.glb'], fit: { s: 1.0 } },
+  claw:     { urls: ['arcade/claw-machine.glb'], fit: { s: 1.0 } },
+  vending:  { urls: ['arcade/vending-machine.glb'], fit: { h: 1.3 } },
+  ticket:   { urls: ['arcade/ticket-machine.glb'], fit: { h: 1.15 } },
+  prizeWheel: { urls: ['arcade/prize-wheel.glb'], fit: { h: 1.4 } },
+  basketball: { urls: ['arcade/basketball-game.glb'], fit: { s: 1.0 } },
+  airHockey: { urls: ['arcade/air-hockey.glb'], fit: { s: 1.0 } },
+  dance:    { urls: ['arcade/dance-machine.glb'], fit: { s: 1.0 } },
   mannequin: { urls: ['shop/mannequin.glb'], fit: { h: 1.15 } },
   bottles:  { urls: ['shop/bottle-return.glb'], fit: { h: 1.05 } },
   column:   { urls: ['shop/column.glb'], fit: { h: 1.3 } },
@@ -36,8 +47,15 @@ const MANIFEST = {
   grass:    { urls: ['nature/Grass_Common_Tall.gltf'], fit: { s: 0.7 } },
   rock:     { urls: ['nature/Rock_Medium_1.gltf'], fit: { s: 0.9 } },
 }
-// só o estilo Mini: jogador e NPCs usam o mesmo modelo, e os chapéus dão a variedade
-const CHARACTERS = ['shop/character-employee.glb']
+for (const id of Object.keys(PETS)) MANIFEST[id] ||= { urls: [`pets/animal-${id}.glb`], fit: { s: 0.55 } }
+
+// só o estilo Mini; clientes usam as pessoas comuns e a equipe, o uniforme de trabalho
+const CHARACTERS = [
+  'shop/character-employee.glb',
+  ...'abcdef'.split('').map((l) => `characters/character-female-${l}.glb`),
+  ...'abcdefg'.split('').map((l) => `characters/character-male-${l}.glb`),
+  ...['worker', 'alien', 'knight', 'raider', 'robot', 'soldier', 'zombie'].map((n) => `characters/character-${n}.glb`),
+]
 
 const loader = new GLTFLoader()
 const store = new Map()
@@ -73,7 +91,7 @@ export async function loadAssets() {
   const jobs = []
   for (const [k, m] of Object.entries(MANIFEST)) jobs.push(tryLoad(m.urls, m.fit).then((r) => r && store.set(k, r)))
   for (const p of PRODUCTS) jobs.push(tryLoad([`food/${p.model}.glb`], { s: 0.17 }).then((r) => r && store.set('food:' + p.id, r)))
-  const cj = CHARACTERS.map((u) => tryLoad([u], { h: 0.95 }))
+  const cj = CHARACTERS.map((u) => tryLoad([u], { h: 0.95 }).then((r) => r && Object.assign(r, { url: u })))
   await Promise.all([...jobs, ...cj])
   for (const p of cj) { const r = await p; if (r) chars.push(r) }
   return { models: store.size, characters: chars.length }
@@ -90,6 +108,14 @@ export const charCount = () => chars.length
 export function makeCharacter(i) {
   if (!chars.length) return null
   const c = chars[i % chars.length]
+  return { obj: skClone(c.scene), animations: c.animations }
+}
+
+// NPC: seed de 0 a 1 escolhe o modelo, sempre o mesmo para a mesma pessoa
+export function makeNpc(staff, seed) {
+  const pool = chars.filter((c) => (staff ? /worker/.test(c.url) : /-(fe)?male-/.test(c.url)))
+  if (!pool.length) return makeCharacter(0)
+  const c = pool[Math.floor(seed * pool.length) % pool.length]
   return { obj: skClone(c.scene), animations: c.animations }
 }
 
@@ -144,6 +170,16 @@ function renderProducts() {
 }
 export const productIcon = (id) => renderProducts()[id].canvas
 export const productThumb = (id) => renderProducts()[id].url
+let petShots = null
+export function petThumb(id) {
+  if (!petShots) {
+    const s = studio()
+    petShots = {}
+    for (const k of Object.keys(PETS)) if (store.has(k)) petShots[k] = s.shot(make(k)).url
+    s.close()
+  }
+  return petShots[id] || null
+}
 // null quando o item não tem modelo 3D (a planta é desenhada à mão)
 export function decorThumb(type) {
   if (!decorShots) {
@@ -172,8 +208,6 @@ export const HATS = [
   { id: 'crown', name: 'Coroa' },
 ]
 export const HAT_COLORS = ['#ef8a77', '#6fb3a8', '#f2c25b', '#5b4a6e', '#f6e7cf', '#7fa6c9']
-const NPC_HATS = ['none', 'cap', 'beanie', 'straw', 'cap', 'beanie']
-export const npcLook = (h) => [NPC_HATS[Math.floor(h * NPC_HATS.length) % NPC_HATS.length], HAT_COLORS[Math.floor(h * 97) % HAT_COLORS.length]]
 
 // medidas em unidades do jogo; a base do chapéu fica em y = 0
 function makeHat(type, color) {
@@ -217,6 +251,26 @@ export function putHat(obj, type, color) {
 const mat = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0, ...o })
 const shared = {}
 const m = (color) => (shared[color] ||= mat(color))
+
+// produtos iguais desenhados em lote: `transforms` tem um Matrix4 por unidade; use .count para mostrar só parte
+const itemParts = new Map()
+export function makeItemInstances(pid, transforms) {
+  if (!itemParts.has(pid)) {
+    const root = makeItem(pid), parts = []
+    root.updateMatrixWorld(true)
+    root.traverse((o) => { if (o.isMesh) parts.push({ geometry: o.geometry, material: o.material, matrix: o.matrixWorld.clone() }) })
+    itemParts.set(pid, parts)
+  }
+  const group = new THREE.Group(), m = new THREE.Matrix4()
+  for (const part of itemParts.get(pid)) {
+    const inst = new THREE.InstancedMesh(part.geometry, part.material, transforms.length)
+    transforms.forEach((t, i) => inst.setMatrixAt(i, m.multiplyMatrices(t, part.matrix)))
+    inst.instanceMatrix.needsUpdate = true
+    inst.castShadow = false; inst.receiveShadow = true; inst.frustumCulled = false
+    group.add(inst)
+  }
+  return group
+}
 
 export function makeItem(pid) {
   const k = make('food:' + pid)

@@ -11,7 +11,7 @@ export function onClick(hit) {
   if (ui.modal || !hit) return
   if (ui.editing) {
     if (ui.held) { if (hit.kind === 'floor') { moveHeld(hit.x, hit.z); dropHeld() } }
-    else if (hit.kind === 'shelf' || hit.kind === 'counter' || hit.kind === 'decor') pickUp(hit.kind, hit.id)
+    else if (hit.kind === 'shelf' || hit.kind === 'counter' || hit.kind === 'decor' || hit.kind === 'cafe') pickUp(hit.kind, hit.id)
     return
   }
   if (hit.kind === 'box') { const b = boxOf(hit.id); b && world.cmdBox(b) }
@@ -19,8 +19,9 @@ export function onClick(hit) {
   else if (hit.kind === 'counter') { if (game.phase === 'open' || game.phase === 'closing') world.cmdServe(); else startEdit() }
   else if (hit.kind === 'door') world.cmdDoor()
   else if (hit.kind === 'pet') world.cmdPet()
+  else if (hit.kind === 'cafe') world.openCafePanel()
   else if (hit.kind === 'decor') { const d = game.decor.find((x) => x.id === hit.id); d && world.cmdUse(d) }
-  else if (hit.kind === 'floor') { ui.panelShelf = null; world.cmdMove(hit.x, hit.z) }
+  else if (hit.kind === 'floor') { ui.panelShelf = null; ui.panelCafe = false; world.cmdMove(hit.x, hit.z) }
 }
 
 export { hoverText } from './texts.js'

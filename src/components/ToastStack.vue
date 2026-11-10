@@ -27,6 +27,7 @@ const hint = computed(() => {
     if (unp) return { icon: PhTag, text: 'Tem prateleira sem preço — clientes ignoram' }
     return null
   }
+  if (game.phase === 'lunch') return { icon: PhSun, text: 'Hora do almoço: ajuste os móveis, faça pedidos expressos e reabra pela porta' }
   return { icon: PhMoonStars, text: 'Faça os pedidos de amanhã no computador e vá dormir' }
 })
 const hintVisible = ref(false)

@@ -7,8 +7,9 @@ import { DAY_SECONDS, WEATHER } from '../game/config.js'
 const WEATHER_ICON = { hot: PhSun, mild: PhCloudSun, cold: PhSnowflake }
 
 const clock = computed(() => clockText())
-const pct = computed(() => (game.phase === 'open' ? (game.clock / DAY_SECONDS) * 100 : game.phase === 'prep' ? 0 : 100))
-const label = { prep: 'Preparação', open: 'Aberta', closing: 'Fechando', night: 'Noite' }
+// em passos de 0,25%: assim a barra não refaz a tela a cada quadro
+const pct = computed(() => (game.phase === 'open' || game.phase === 'lunch' ? Math.round((game.clock / DAY_SECONDS) * 400) / 4 : game.phase === 'prep' ? 0 : 100))
+const label = { prep: 'Preparação', open: 'Aberta', lunch: 'Almoço', closing: 'Fechando', night: 'Noite' }
 const stars = computed(() => Math.round(game.rep))
 </script>
 

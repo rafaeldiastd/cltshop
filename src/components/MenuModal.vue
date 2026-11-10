@@ -1,11 +1,12 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { PhArrowCounterClockwise, PhCat, PhClockCounterClockwise, PhDog, PhGameController, PhList, PhPawPrint, PhSmiley, PhUser } from '@phosphor-icons/vue'
+import { PhArrowCounterClockwise, PhBug, PhClockCounterClockwise, PhGameController, PhList, PhPawPrint, PhSmiley, PhUser } from '@phosphor-icons/vue'
+import DebugPanel from './DebugPanel.vue'
 import Modal from './Modal.vue'
 import LogHistory from './LogHistory.vue'
 import CustomerStats from './CustomerStats.vue'
 import { settings, ui, restartGame } from '../game/state.js'
-import { HATS, HAT_COLORS, characterThumbs } from '../game/assets.js'
+import { HATS, HAT_COLORS, characterThumbs, petThumb } from '../game/assets.js'
 import { CharacterPreview } from '../game/preview.js'
 import { PETS } from '../game/config.js'
 
@@ -16,7 +17,8 @@ const TABS = [
   { id: 'log', label: 'Histórico', icon: PhClockCounterClockwise },
   { id: 'keys', label: 'Controles', icon: PhGameController },
 ]
-const PET_ICON = { cat: PhCat, dog: PhDog }
+// debug aparece rodando localmente; no site publicado, só abrindo com ?debug no endereço
+if (import.meta.env.DEV || new URLSearchParams(location.search).has('debug')) TABS.push({ id: 'debug', label: 'Debug', icon: PhBug })
 const tab = ref('char')
 const cv = ref(null)
 const thumbs = ref([])
@@ -73,11 +75,12 @@ const KEYS = [
 
     <div v-if="tab === 'pet'" class="pets">
       <button v-for="(p, id) in PETS" :key="id" class="pet" :class="{ on: settings.pet === id }" @click="settings.pet = id">
-        <component :is="PET_ICON[id]" class="face" weight="duotone" /><b>{{ p.name }}</b>
+        <img v-if="petThumb(id)" :src="petThumb(id)" class="face" alt="" /><PhPawPrint v-else class="face" weight="duotone" /><b>{{ p.name }}</b>
       </button>
       <p class="muted full">Para fazer carinho, clique no bichinho ou chegue perto e aperte <kbd>E</kbd>.</p>
     </div>
 
+    <DebugPanel v-if="tab === 'debug'" />
     <CustomerStats v-if="tab === 'customers'" />
     <LogHistory v-if="tab === 'log'" />
 
@@ -90,7 +93,7 @@ const KEYS = [
     </div>
 
     <template #foot>
-      <button class="btn restart" @click="restartGame"><PhArrowCounterClockwise weight="bold" /> Recomeçar</button>
+      <button class="btn restart" @click="restartGame"><PhArrowCounterClockwise weight="bold" /> Recomeçar o jogo</button>
       <button class="btn primary" @click="close">Fechar</button>
     </template>
   </Modal>
@@ -109,10 +112,10 @@ h3 { margin: 8px 0 6px; font-size: 1em; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .swatch { width: 32px; height: 32px; border-radius: 50%; border: 3px solid transparent; box-shadow: inset 0 0 0 1px rgba(59, 47, 74, .2); }
 .swatch.on { border-color: var(--plum); }
-.pets { display: grid; grid-template-columns: repeat(2, 150px); gap: 10px; }
-.pet { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px; background: var(--cream2); border-radius: 14px; border: 3px solid transparent; }
+.pets { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.pet { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; background: var(--cream2); border-radius: 12px; border: 3px solid transparent; font-size: 13px; }
 .pet.on { border-color: var(--coral); background: #fff; }
-.face { font-size: 44px; line-height: 1; }
+.face { width: 52px; height: 52px; }
 .full { grid-column: 1 / -1; }
 .line { display: flex; gap: 14px; align-items: center; padding: 8px 0; border-bottom: 1px dashed rgba(59, 47, 74, .15); }
 .k { flex: 0 0 210px; }

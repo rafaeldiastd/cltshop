@@ -25,7 +25,7 @@ const assign = (e) => {
     </div>
     <select v-if="shelf.count === 0" :value="shelf.product || ''" aria-label="Produto desta prateleira" @change="assign">
       <option value="">Escolher produto…</option>
-      <option v-for="x in PRODUCTS.filter((x) => game.unlocked[x.id] && !!x.cold === !!shelf.fridge)" :key="x.id" :value="x.id">{{ x.name }}</option>
+      <option v-for="x in PRODUCTS.filter((x) => game.unlocked[x.id] && (x.either || !!x.cold === !!shelf.fridge))" :key="x.id" :value="x.id">{{ x.name }}</option>
     </select>
     <template v-if="p">
       <div class="fill"><i :style="{ width: (shelf.count / SHELF_CAP) * 100 + '%' }" /></div>

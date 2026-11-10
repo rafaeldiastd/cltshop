@@ -14,6 +14,7 @@ const orders = () => { ui.computerApp = 'products'; ui.modal = 'computer' }
   <Modal :title="`Fim do dia ${s.day}`" :icon="PhMoonStars">
     <div class="grid">
       <div>Vendas</div><b>{{ money(s.revenue) }}</b>
+      <template v-if="s.cafeSales"><div class="muted">Da cafeteria ({{ s.cafeSales }} pedidos)</div><span>{{ money(s.cafeRevenue) }}</span></template>
       <div class="muted">Custo dos produtos vendidos</div><span>− {{ money(s.cogs) }}</span>
       <div class="muted">Salários</div><span>− {{ money(s.wages) }}</span>
       <template v-if="s.stolen"><div class="muted">Roubos ({{ s.stolenUnits }} itens)</div><span class="bad-t">− {{ money(s.stolen) }}</span></template>
@@ -21,6 +22,7 @@ const orders = () => { ui.computerApp = 'products'; ui.modal = 'computer' }
       <div class="muted">Caixa agora</div><span>{{ money(game.money) }}</span>
     </div>
     <p class="muted">{{ s.served }} clientes atendidos de {{ s.customers }} · {{ s.units }} itens vendidos · reputação {{ s.rep.toFixed(1) }} <PhStar weight="fill" /></p>
+    <p v-if="s.lunchMissed" class="bad-t caught">{{ s.lunchMissed === 1 ? '1 cliente encontrou' : `${s.lunchMissed} clientes encontraram` }} a loja fechada no almoço</p>
     <p v-if="s.caught" class="good-t caught">{{ s.caught === 1 ? '1 roubo evitado' : `${s.caught} roubos evitados` }}</p>
     <div class="news"><PhNewspaper weight="duotone" /> <span>{{ game.market.text || 'Sem novidades no mercado' }}. Amanhã: {{ WEATHER[game.weather].name.toLowerCase() }}.</span></div>
     <h3>Mais vendidos</h3>

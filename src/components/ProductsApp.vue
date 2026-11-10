@@ -1,14 +1,14 @@
 <script setup>
 import { computed } from 'vue'
 import { PhLockKey, PhMinus, PhMoonStars, PhNewspaper, PhPlus, PhShoppingCart, PhSnowflake, PhTruck } from '@phosphor-icons/vue'
-import { game, ui, money, boxCost, cartAdd, cartTotal, placeOrder, unlockProduct, stockInfo, costOf, costChange } from '../game/state.js'
+import { game, ui, money, boxCost, cartAdd, cartTotal, placeOrder, unlockProduct, stockInfo, costOf, costChange, isExpress, orderFee } from '../game/state.js'
 import { world } from '../game/world.js'
 import { productThumb } from '../game/assets.js'
 import { PRODUCTS, PACK } from '../game/config.js'
 
 const open = computed(() => PRODUCTS.filter((p) => game.unlocked[p.id]))
 const locked = computed(() => PRODUCTS.filter((p) => !game.unlocked[p.id]))
-const total = computed(() => cartTotal())
+const total = computed(() => cartTotal() + orderFee())
 const missed = (id) => game.summary?.oos?.[id] || 0
 const sold = (id) => game.summary?.sold?.[id] || 0
 const sleep = () => { if (placeOrder()) world.startNextDay() }
@@ -55,8 +55,8 @@ const sleep = () => { if (placeOrder()) world.startNextDay() }
     </div>
 
     <footer>
-      <span class="muted">Cada caixa traz {{ PACK }} unidades e chega na calçada amanhã cedo.</span>
-      <span class="sum">Total <b :class="total > game.money ? 'bad-t' : ''">{{ money(total) }}</b></span>
+      <span class="muted">{{ isExpress() ? `Entrega expressa: cada caixa traz ${PACK} unidades e chega agora na calçada, com taxa de 30%.` : `Cada caixa traz ${PACK} unidades e chega na calçada amanhã cedo.` }}</span>
+      <span class="sum"><span v-if="orderFee()" class="muted">Taxa {{ money(orderFee()) }} · </span>Total <b :class="total > game.money ? 'bad-t' : ''">{{ money(total) }}</b></span>
       <button class="btn" :disabled="!total" @click="placeOrder">Emitir pedido</button>
       <button v-if="game.phase === 'night'" class="btn primary" @click="sleep"><PhMoonStars weight="fill" /> Confirmar e dormir</button>
     </footer>
