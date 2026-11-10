@@ -63,7 +63,7 @@ export const EVENTS = [
   { text: 'Baixa produção de leite', mods: { milk: up(1.4) } },
   { text: 'Feira do peixe: barato e muito procurado', mods: { fish: { ...up(0.7), demand: 1.6 } } },
   { text: 'Influencer elogiou os donuts da cidade', mods: { donut: { ref: 1.2, demand: 1.9 } } },
-  { text: 'Semana da confeitaria: bolo e cookie em alta', mods: { cake: { ref: 1.2, demand: 1.8 }, cookie: { ref: 1.15, demand: 1.5 } } },
+  { text: 'Semana da confeitaria: bolo e cookie em alta', mods: { cake: { ref: 1.2, demand: 1.8 }, cookie: { ref: 1.15, demand: 1.5 }, donut: { ref: 1.15, demand: 1.5 } } },
   { text: 'Fábrica de gelo quebrou: gelados mais caros', mods: { soda: up(1.3), popsicle: up(1.3), icecream: up(1.3) } },
   { text: 'Promoção na distribuidora de bebidas', mods: { soda: up(0.7), juice: up(0.75) } },
   { text: 'Geada nos cafezais: café bem mais caro', mods: { coffee: up(1.5) } },
