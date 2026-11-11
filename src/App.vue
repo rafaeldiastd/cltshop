@@ -16,23 +16,32 @@ import ComputerScreen from './components/ComputerScreen.vue'
 import MenuModal from './components/MenuModal.vue'
 import ThiefAlert from './components/ThiefAlert.vue'
 import CafePanel from './components/CafePanel.vue'
+import NpcPanel from './components/NpcPanel.vue'
+import StaffBar from './components/StaffBar.vue'
 import BuildMode from './components/BuildMode.vue'
 import PetModal from './components/PetModal.vue'
 import { stopBuild } from './game/build.js'
 import { PhCrosshair } from '@phosphor-icons/vue'
 import MusicPanel from './components/MusicPanel.vue'
+import CloudLock from './components/CloudLock.vue'
+import { startCloud, cloudStarted, saveSoon, saveOnExit } from './game/cloud.js'
 
 const cv = ref(null)
 let raf = 0, rend, autosave = 0, bgWorker = null, bgTimer = 0
 const tip = ref(null)
-const saveIfHidden = () => { if (document.hidden) save() }
+const saveIfHidden = () => { if (document.hidden) saveOnExit() }
+// gastou dinheiro (compra, contratação, obra…): grava já, para o F5 não desfazer
+watch(() => game.money, (n, o) => { if (ui.ready && n < o) saveSoon() })
 
+// a prateleira e o cliente dividem o mesmo lugar na tela: abrir uma fecha a outra
+watch(() => ui.panelShelf, (v) => { if (v != null) { ui.npc = null; ui.npcInfo = null } })
 watch(() => settings.musicOn, setMusic, { immediate: true })
 watch(() => settings.sfxOn, setSfx, { immediate: true })
 
 onMounted(async () => {
+  // a nuvem pode trazer um save mais novo, então ela vem antes do load()
+  await Promise.all([startCloud(), loadAssets()])
   if (!load()) newGame()
-  await loadAssets()
   rend = new Renderer(cv.value)
   rend.onClick = onClick
   rend.onHover = (h) => {
@@ -45,7 +54,8 @@ onMounted(async () => {
   world.refreshGrid()
   ui.ready = true
   autosave = setInterval(save, 5000)
-  addEventListener('pagehide', save)
+  addEventListener('pagehide', saveOnExit)
+  cloudStarted()
   document.addEventListener('visibilitychange', saveIfHidden)
   let last = performance.now()
   const loop = (t) => {
@@ -73,7 +83,7 @@ onMounted(async () => {
     if (e.key === 'Escape') {
       if (ui.build) { stopBuild(); return }
       if (ui.editing) { if (ui.held || ui.buyTool) deselectTool(); else stopEdit(); return }
-      ui.selectedBox = null; ui.panelShelf = null; ui.panelCafe = false; ui.modal = ui.modal === 'summary' ? ui.modal : null; return
+      ui.selectedBox = null; ui.panelShelf = null; ui.panelCafe = false; ui.npc = null; ui.modal = ui.modal === 'summary' ? ui.modal : null; return
     }
     if (ui.build || typing(e) || e.metaKey || e.ctrlKey) return
     if (MAP[e.code]) { world.keys.add(MAP[e.code]); startMusic(); e.preventDefault(); return }
@@ -102,7 +112,7 @@ onBeforeUnmount(() => {
   clearInterval(autosave)
   clearInterval(bgTimer)
   bgWorker?.terminate()
-  removeEventListener('pagehide', save)
+  removeEventListener('pagehide', saveOnExit)
   document.removeEventListener('visibilitychange', saveIfHidden)
 })
 </script>
@@ -114,6 +124,8 @@ onBeforeUnmount(() => {
     <ToastStack />
     <ShelfPanel />
     <CafePanel />
+    <NpcPanel />
+    <StaffBar />
     <BuildMode />
     <BottomBar />
     <MusicPanel />
@@ -126,6 +138,7 @@ onBeforeUnmount(() => {
     <div v-if="tip" class="tip" :style="{ left: ui.mouse.x + 14 + 'px', top: ui.mouse.y + 14 + 'px' }">{{ tip }}</div>
   </template>
   <div v-else class="loading">carregando a lojinha…</div>
+  <CloudLock />
 </template>
 
 <style>

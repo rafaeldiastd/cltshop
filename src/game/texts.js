@@ -37,6 +37,7 @@ export function hoverText(hit) {
   }
   if (hit.kind === 'counter') return game.phase === 'open' || game.phase === 'closing' ? 'Atender no caixa' : 'Mudar layout da loja'
   if (hit.kind === 'pet') return 'Interagir com o pet'
+  if (hit.kind === 'customer') return hit.obj?.userData.label ? `${hit.obj.userData.label} · clique para ver` : null
   if (hit.kind === 'cafe') return 'Preços da cafeteria'
   if (hit.kind === 'door') return game.phase === 'prep' ? 'Abrir a loja' : game.phase === 'lunch' ? 'Reabrir a loja (13h)' : game.phase === 'open' ? 'Loja aberta' : 'Loja fechada'
   if (hit.kind === 'decor') {

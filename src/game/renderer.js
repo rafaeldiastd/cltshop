@@ -5,9 +5,11 @@ import { toRaw } from 'vue'
 import { game, ui, money, settings } from './state.js'
 import { world } from './world.js'
 import { PID, DAY_SECONDS, FREEZER, DECOR } from './config.js'
+import { roleName } from './people.js'
 import { dims, boxSlots, stockRoom, onFloor, isUsable, backPartner, elbowOf, DIRS, planKey } from './layout.js'
 import { nextPlan } from './build.js'
 import * as assets from './assets.js'
+import { makeAvatar } from './avatar.js'
 import { setThumbMaker } from './thumbs.js'
 import { Scenery } from './scenery.js'
 import { checkoutGuide, produceSlots } from './editor.js'
@@ -1050,15 +1052,15 @@ export class Renderer {
     const hue = a.hue ?? 0.5
     const shirt = a.kind === 'player' ? C.coral : a.kind === 'staff' ? (a.role === 'cashier' ? C.mustard : C.teal) : a.kind === 'tech' ? C.plum : new THREE.Color().setHSL(hue, 0.45, 0.68).getHex()
     const ch = a.kind === 'pet' ? assets.makeAnim(a.species)
-      : a.kind === 'player' ? assets.makeCharacter(settings.character)
+      : a.kind === 'player' ? makeAvatar(settings.avatar) || assets.makeCharacter(settings.character)
       : a.kind === 'staff' && a.member ? assets.makePersonModel(a.member.g, a.member.look)
+      : a.kind === 'customer' ? assets.makePersonModel(a.g, a.look) // mesmo sexo do nome
       : a.kind === 'tech' ? assets.makeWorker()
       : assets.makeNpc(a.kind === 'staff', a.hue ?? Math.random())
     const body = new THREE.Group(); gr.add(body)
     let mixer = null, clips = {}
     if (ch) {
-      if (a.kind === 'player') assets.putHat(ch.obj, settings.hat, settings.hatColor)
-      else if (a.kind === 'staff') assets.putHat(ch.obj, 'cap', STAFF_CAP[a.role] || '#6fb3a8')
+      if (a.kind === 'staff') assets.putHat(ch.obj, 'cap', STAFF_CAP[a.role] || '#6fb3a8')
       else if (a.thief) assets.putHat(ch.obj, 'beanie', '#3b2f4a')
       ch.obj.traverse((o) => { if (o.isMesh) o.castShadow = false }) // quem anda usa a sombra redonda no chão
       body.add(ch.obj)
@@ -1086,11 +1088,20 @@ export class Renderer {
       Object.assign(gr.userData, { kind: 'pet', id: a.id })
       addHit(gr, 0.8, 0.8, 0.8)
     }
+    if (a.kind === 'customer') { // clique no cliente abre o painel; passar o mouse mostra nome e idade
+      const label = `${a.name}, ${a.age} anos`
+      Object.assign(gr.userData, { kind: 'customer', id: a.id, label })
+      addHit(gr, 0.6, 1.1, 0.6, 0.55)
+    }
+    if (a.kind === 'staff' && a.member) { // cargo fica visível em cima da cabeça, sem precisar passar o mouse
+      const SHORT = { cashier: 'Caixa', stocker: a.member.g === 'f' ? 'Repositora' : 'Repositor', barista: 'Café', courier: 'Moto', cleaner: 'Faxina' }
+      const badge = sprite(tagTex(SHORT[a.role] || roleName(a.role, a.member.g), STAFF_CAP[a.role] || '#6fb3a8'), 0.8, 0.25); badge.position.y = 1.22; gr.add(badge)
+    }
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.22, 14), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18 }))
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.01; shadow.userData.noOutline = true; gr.add(shadow)
     gr.position.set(a.x, 0, a.z)
     this.scene.add(gr)
-    return { gr, body, emo, tag, note, mixer, clips, emoKey: '', tagKey: '', noteKey: '', ph: Math.random() * 6 }
+    return { gr, body, emo, tag, note, mixer, clips, seq: a.anim?.seq || 0, busy: null, emoKey: '', tagKey: '', noteKey: '', ph: Math.random() * 6 }
   }
   syncActors(dt) {
     const list = world.actors
@@ -1098,15 +1109,30 @@ export class Renderer {
     for (const [id, v] of this.actorViews) if (!alive.has(id)) { this.scene.remove(v.gr); this.actorViews.delete(id) }
     for (const a of list) {
       let v = this.actorViews.get(a.id)
-      const skin = a.kind === 'player' ? `${settings.character}|${settings.hat}|${settings.hatColor}` : a.kind === 'pet' ? a.species : a.member ? `${a.member.g}${a.member.look}` : ''
+      const skin = a.kind === 'player' ? JSON.stringify(settings.avatar) : a.kind === 'pet' ? a.species : a.member ? `${a.member.g}${a.member.look}` : ''
       if (v && v.skin !== skin) { this.scene.remove(v.gr); v = null }
       if (!v) { v = this.makeActorView(a); v.skin = skin; this.actorViews.set(a.id, v) }
       v.gr.position.x = a.x; v.gr.position.z = a.z
       let d = a.face - v.gr.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d))
       v.gr.rotation.y += d * Math.min(1, dt * 12)
       if (v.mixer) {
-        const want = a.moving ? (v.clips.walk || v.clips.sprint || v.clips.run) : (v.clips.idle || v.clips.static)
-        if (want && v.cur !== want) { v.cur?.fadeOut(0.2); want.reset().fadeIn(0.2).play(); v.cur = want }
+        // ação que toca uma vez (pick-up, emote-yes...): quando o seq muda, toca e volta ao loop depois
+        if (a.anim && a.anim.seq !== v.seq) {
+          v.seq = a.anim.seq
+          const act = v.clips[a.anim.name]
+          if (act) {
+            v.cur?.fadeOut(0.15)
+            act.reset().setLoop(THREE.LoopOnce, 1); act.clampWhenFinished = true
+            act.fadeIn(0.15).play(); v.cur = act; v.busy = act
+          }
+        }
+        if (v.busy && v.busy.time >= v.busy.getClip().duration - 0.01) v.busy = null
+        if (!v.busy) {
+          // pose em loop (carregar caixa, sentar no almoço) só quando parado; andando usa o walk
+          const pose = a.moving ? null : a.pose || (a.kind === 'staff' && game.phase === 'lunch' && a.idle ? 'sit' : null)
+          const want = a.moving ? (v.clips.walk || v.clips.sprint || v.clips.run) : (v.clips[pose] || v.clips.idle || v.clips.static)
+          if (want && v.cur !== want) { v.cur?.fadeOut(0.2); want.reset().fadeIn(0.2).play(); v.cur = want }
+        }
         v.mixer.update(dt)
       } else {
         v.ph += dt * (a.moving ? 11 : 2)
@@ -1327,6 +1353,7 @@ export class Renderer {
         for (const v of this.boxViews.values()) add(v.gr)
         add(this.doorG)
         for (const p of world.pets) add(this.actorViews.get(p.id)?.gr)
+        for (const a of world.customers) add(this.actorViews.get(a.id)?.gr) // a equipe não é clicável no cenário: clique nela só pelo avatar
         for (const v of this.dirtViews.values()) add(v.gr)
         for (const d of toRaw(game.decor)) if (isUsable(d)) add(this.decorViews.get(d.id))
       }

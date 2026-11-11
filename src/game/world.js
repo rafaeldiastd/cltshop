@@ -5,6 +5,7 @@ import { makeGoals, checkGoals } from './goals.js'
 import { dims, cashierTile, queueTiles, doorTile, doorInside, shelfAccess, shelfPoint, stockStand, stockRoom, inStock, boxSlots, isUsable } from './layout.js'
 import { sfx } from './audio.js'
 import { hoverText } from './texts.js'
+import { newNpcIdentity, npcInfo, staffInfo } from './npc.js'
 import { startEdit } from './editor.js'
 
 const rnd = (a, b) => a + Math.random() * (b - a)
@@ -20,9 +21,11 @@ export const call = (fn) => ({ t: 'call', fn })
 
 class Actor {
   constructor(o) {
-    Object.assign(this, { x: 0, z: 0, path: null, steps: [], speed: 2.3, face: 0, moving: false, work: null, emote: null, emoteT: 0, bubble: null, bubbleT: 0 }, o)
+    Object.assign(this, { x: 0, z: 0, path: null, steps: [], speed: 2.3, face: 0, moving: false, work: null, emote: null, emoteT: 0, bubble: null, bubbleT: 0, anim: null, pose: null }, o)
   }
-  setSteps(steps) { this.steps = steps; this.path = null; this.work = null }
+  setSteps(steps) { this.steps = steps; this.path = null; this.work = null; this.pose = null }
+  // clipe de ação que toca uma vez (pick-up, emote-yes...); o renderer só reage quando o seq muda
+  play(name) { this.anim = { name, seq: (this.anim?.seq || 0) + 1 } }
   get idle() { return this.steps.length === 0 }
   say(e, t = 2.2) { this.emote = e; this.emoteT = t }
   update(dt, world) {
@@ -204,7 +207,7 @@ class World {
     const steps = []
     if (actor?.kind !== 'player') steps.push(go(st.x, st.z))
     if (!this.close(actor, pt.x, pt.z, 1.7)) steps.push(go(a.x, a.z))
-    return [...steps, work((0.5 + 0.08 * units) * m, 'Repondo prateleira', (who) => this.doShelve(box, shelf, who)), call(() => { box.res = null })]
+    return [call((w) => { w.pose = 'holding-right' }), ...steps, work((0.5 + 0.08 * units) * m, 'Repondo prateleira', (who) => this.doShelve(box, shelf, who)), call((w) => { box.res = null; w.pose = null })]
   }
   doShelve(box, shelf, who) {
     if (!game.boxes.includes(box) || box.state !== 'open') return
@@ -216,6 +219,7 @@ class World {
     shelf.count += n
     box.count -= n
     sfx('pop')
+    who?.play?.('pick-up')
     if (box.count <= 0) {
       // a caixa do jogador fica vazia na mão; a dos repositores eles mesmos descartam
       if (who?.kind === 'player') { box.state = 'empty'; box.product = null; box.keep = false }
@@ -500,7 +504,7 @@ class World {
   spawnCustomer() {
     const { cols, rows } = this.d
     const left = Math.random() < 0.5
-    const c = new Actor({ id: 'c' + uid(), kind: 'customer', x: left ? -3 : cols + 2, z: rows + 2, speed: rnd(1.6, 2.1), basket: [], wants: [], patience: PATIENCE, waiting: false, hue: Math.random(), felt: new Set() })
+    const c = new Actor({ id: 'c' + uid(), kind: 'customer', ...newNpcIdentity(), x: left ? -3 : cols + 2, z: rows + 2, speed: rnd(1.6, 2.1), basket: [], wants: [], came: [], issues: [], patience: PATIENCE, waiting: false, hue: Math.random(), felt: new Set() })
     const pool = PRODUCTS.filter((p) => game.unlocked[p.id])
     const maxItems = hasPerk('basket2') ? 5 : hasPerk('basket1') ? 4 : 3
     const n = Math.min(pool.length, 1 + Math.floor(Math.random() * maxItems))
@@ -512,8 +516,10 @@ class World {
       bag.splice(bag.indexOf(pick), 1)
       c.wants.push({ pid: pick.id, qty: Math.random() < 0.6 ? 1 : 2, willing: refOf(pick.id) * rnd(0.85, 1.35) })
     }
+    c.came = c.wants.map((w) => ({ pid: w.pid, qty: w.qty })) // foto do que veio buscar (wants vai sendo consumido na loja)
     game.today.customers++
     if (this.cafeOpen() && Math.random() < CAFE.chance * (game.weather === 'cold' ? 1.3 : game.weather === 'hot' ? 0.8 : 1)) c.cafeOrder = this.pickCafeItem()
+    c.cafeCame = c.cafeOrder?.name ?? null
     const dt = doorTile(game.plan), di = doorInside(game.plan)
     c.setSteps([go(dt.x, dt.z), go(di.x, di.z), call(() => { c.entered = true; this.feel(c, this.firstImpression(c), 2); this.maybeDirt(c, 'mud') }), wait(1), call(() => this.shopNext(c))])
     this.customers.push(c)
@@ -599,6 +605,7 @@ class World {
     if (!avail.length) {
       game.today.oos[w.pid] = (game.today.oos[w.pid] || 0) + w.qty
       game.today.lostValue += w.qty * refOf(w.pid)
+      c.issues.push({ kind: 'unseen', pid: w.pid }) // nem está à venda na loja
       this.feel(c, p.cold && game.weather === 'hot' ? 'hot' : 'missing'); game.rep = Math.max(1, game.rep - 0.012)
       return c.setSteps([wait(0.6), call(() => this.shopNext(c))])
     }
@@ -613,10 +620,12 @@ class World {
     if (shelf.count <= 0 || shelf.product !== w.pid || shelf.broken) {
       game.today.oos[w.pid] = (game.today.oos[w.pid] || 0) + w.qty
       game.today.lostValue += w.qty * refOf(w.pid)
+      c.issues.push({ kind: 'missing', pid: w.pid }) // a prateleira estava vazia ou quebrada
       this.feel(c, 'missing')
     } else if (shelf.price > maxPay) {
       game.today.price[w.pid] = (game.today.price[w.pid] || 0) + w.qty
       game.today.lostValue += w.qty * refOf(w.pid)
+      c.issues.push({ kind: 'pricey', pid: w.pid, price: shelf.price, willing: maxPay })
       this.feel(c, 'pricey'); game.rep = Math.max(1, game.rep - 0.01)
     } else {
       let q = w.qty
@@ -662,6 +671,7 @@ class World {
     c.cafeOrder = null
     if (cafePrice(item.id) > cafeRef(item.id) * rnd(0.85, 1.35)) { // achou caro e desiste do lanche
       game.today.lostValue += cafeRef(item.id)
+      c.cafeSkipped = { name: item.name, price: cafePrice(item.id) }
       this.feel(c, 'pricey')
       return c.setSteps([wait(0.8), call(() => this.checkout(c))])
     }
@@ -678,6 +688,7 @@ class World {
     t.cafeRevenue += price
     if (!c.basket.length) t.served++
     c.hadCafe = true
+    c.cafeBuy = { name: item.name, price }
     c.bubble = money(price); c.bubbleT = 2.6
     this.feel(c, 'cafe', 2.6); sfx('coin')
     for (const b of this.staff) if (b.role === 'barista') gainMemberXp(b.member, 1)
@@ -686,7 +697,7 @@ class World {
   checkout(c) {
     if (c.cafeOrder && game.phase === 'open' && this.cafeOpen()) return this.goCafe(c)
     c.cafeOrder = null
-    if (!c.basket.length) { if (!c.hadCafe) this.feel(c, 'nothing'); return this.leave(c) }
+    if (!c.basket.length) { if (!c.hadCafe) { this.feel(c, 'nothing'); c.play('emote-no') } return this.leave(c) }
     if (this.queue.length >= 4) { c.waiting = true; return c.setSteps([wait(1), call(() => this.checkout(c))]) }
     c.waiting = false
     this.queue.push(c)
@@ -708,7 +719,9 @@ class World {
     game.money += total; t.revenue += total; t.served++
     game.rep = Math.min(5, game.rep + 0.02)
     gainXp(1)
-    for (const a of this.staff) if (a.role === 'cashier' && a.serving) gainMemberXp(a.member, 1)
+    for (const a of this.staff) if (a.role === 'cashier' && a.serving) { gainMemberXp(a.member, 1); a.play('interact-right') }
+    if (this.player.cashiering) this.player.play('interact-right')
+    c.play('emote-yes')
     this.feel(c, 'paid', 2.6); sfx('coin')
     c.bubble = money(total); c.bubbleT = 2.6
     c.state = 'paid'
@@ -726,6 +739,20 @@ class World {
     return this.player.cashiering || this.staff.some((s) => s.role === 'cashier' && s.idle && Math.hypot(s.x - c.x, s.z - c.z) < 0.3)
   }
 
+  // ---------- painel do cliente: clicar num cliente mostra o resumo dele; depois que sai, o último resumo fica ----------
+  openNpc(id) {
+    ui.npc = id; ui.npcInfo = this.npcSnapshot(id)
+    ui.panelShelf = null; ui.panelCafe = false
+  }
+  npcSnapshot(id) {
+    const c = this.customers.find((x) => x.id === id)
+    if (c) return npcInfo(c)
+    const m = game.team.find((x) => x.id === id)
+    if (m) return staffInfo(m, this.staff.find((a) => a.id === id))
+    if (ui.npcInfo?.id !== id) return null
+    return { ...ui.npcInfo, status: ui.npcInfo.kind === 'staff' ? 'Saiu da equipe' : 'Saiu da loja' }
+  }
+
   // ---------- ladrão: aparece de vez em quando; clicar no balão em 3 segundos evita o roubo ----------
   planThieves() {
     const n = game.day < 2 ? 0 : Math.random() < 0.35 ? 2 : 1
@@ -737,7 +764,7 @@ class World {
     if (!targets.length) return
     const shelf = targets[Math.floor(Math.random() * targets.length)]
     const { cols, rows } = this.d, left = Math.random() < 0.5
-    const c = new Actor({ id: 't' + uid(), kind: 'customer', thief: true, x: left ? -3 : cols + 2, z: rows + 2, speed: 2.2, basket: [], wants: [], patience: 999, waiting: false, hue: Math.random(), felt: new Set() })
+    const c = new Actor({ id: 't' + uid(), kind: 'customer', thief: true, ...newNpcIdentity(), x: left ? -3 : cols + 2, z: rows + 2, speed: 2.2, basket: [], wants: [], came: [], issues: [], patience: 999, waiting: false, hue: Math.random(), felt: new Set() })
     const dt = doorTile(game.plan), di = doorInside(game.plan), a = shelfAccess(shelf)
     c.setSteps([go(dt.x, dt.z), go(di.x, di.z), call(() => (c.entered = true)), go(a.x, a.z), call(() => this.startTheft(c, shelf))])
     this.customers.push(c)
@@ -813,9 +840,10 @@ class World {
     if (!game.zapOn || onDuty('courier') <= 0 || game.phase !== 'open') return
     this.delivAcc = (this.delivAcc || 0) + dt
     const openOrders = game.orders.filter((o) => o.state === 'waiting' || o.state === 'packing')
-    if (this.delivAcc >= 10 && openOrders.length < DELIVERY.maxOpen && Math.random() < DELIVERY.rate) {
-      this.delivAcc = 0
-      this.spawnDeliveryOrder()
+    if (this.delivAcc >= DELIVERY.every) {
+      this.delivAcc = 0 // um sorteio por intervalo
+      const w = DELIVERY.weather[game.weather] || DELIVERY.weather.mild
+      if (openOrders.length < DELIVERY.maxOpen && Math.random() < DELIVERY.rate * w.rate) this.spawnDeliveryOrder()
     }
   }
   spawnDeliveryOrder() {
@@ -824,8 +852,12 @@ class World {
     const items = []
     const count = 1 + Math.floor(Math.random() * 2)
     const bag = [...pool]
+    const dw = (DELIVERY.weather[game.weather] || DELIVERY.weather.mild).drinks // calor: bebidas geladas pesam mais no sorteio
+    const weight = (p) => (p.section === 'drink' ? dw : 1)
     for (let i = 0; i < count && bag.length; i++) {
-      const p = bag.splice(Math.floor(Math.random() * bag.length), 1)[0]
+      let r = Math.random() * bag.reduce((t, p) => t + weight(p), 0), k = 0
+      while (k < bag.length - 1 && (r -= weight(bag[k])) > 0) k++
+      const p = bag.splice(k, 1)[0]
       const price = productPrice(p.id) ?? refOf(p.id)
       items.push({ pid: p.id, qty: 1 + Math.floor(Math.random() * 2), price })
     }
@@ -1173,6 +1205,10 @@ class World {
 
   // ---------- loop ----------
   update(rawDt) {
+    if (ui.npc) { // painel do cliente aberto: atualiza o resumo algumas vezes por segundo
+      this.npcT = (this.npcT || 0) - rawDt
+      if (this.npcT <= 0) { this.npcT = 0.25; ui.npcInfo = this.npcSnapshot(ui.npc) }
+    }
     this.ensureStaff()
     this.ensureEmptyBox()
     if (ui.atRegister !== this.player.cashiering) ui.atRegister = this.player.cashiering
@@ -1226,7 +1262,7 @@ class World {
           game.today.patience++
           game.today.lostValue += c.basket.reduce((s, b) => s + b.qty * b.price, 0)
           game.rep = Math.max(1, game.rep - 0.04)
-          this.feel(c, 'angry'); this.leave(c)
+          this.feel(c, 'angry'); c.play('emote-no'); this.leave(c)
         }
       }
     }

@@ -17,6 +17,7 @@ export function onClick(hit) {
   if (hit.kind === 'box') { const b = boxOf(hit.id); b && world.cmdBox(b) }
   else if (hit.kind === 'shelf') { const s = shelfOf(hit.id); s && world.cmdShelf(s) }
   else if (hit.kind === 'counter') { if (game.phase === 'open' || game.phase === 'closing') world.cmdServe(); else startEdit() }
+  else if (hit.kind === 'customer') world.openNpc(hit.id)
   else if (hit.kind === 'door') world.cmdDoor()
   else if (hit.kind === 'pet') world.openPetMenu()
   else if (hit.kind === 'dirt') world.cmdClean(game.dirt.find((d) => d.id === hit.id))

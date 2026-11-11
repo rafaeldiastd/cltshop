@@ -105,6 +105,7 @@ export function makeAnim(k) {
   return { obj: skClone(r.scene), animations: r.animations }
 }
 export const charCount = () => chars.length
+export const charByUrl = (u) => chars.find((c) => c.url === u)
 export function makeCharacter(i) {
   if (!chars.length) return null
   const c = chars[i % chars.length]
@@ -221,15 +222,7 @@ function posed(obj, animations) {
 }
 export { posed as poseCharacter }
 
-export const HATS = [
-  { id: 'none', name: 'Sem chapéu' },
-  { id: 'cap', name: 'Boné' },
-  { id: 'beanie', name: 'Gorro' },
-  { id: 'straw', name: 'Chapéu' },
-  { id: 'crown', name: 'Coroa' },
-]
-export const HAT_COLORS = ['#ef8a77', '#6fb3a8', '#f2c25b', '#5b4a6e', '#f6e7cf', '#7fa6c9']
-
+// a lista de chapéus e cores do criador de personagem fica em avatarData.js
 // medidas em unidades do jogo; a base do chapéu fica em y = 0
 function makeHat(type, color) {
   const g = new THREE.Group()
@@ -252,6 +245,21 @@ function makeHat(type, color) {
     add(new THREE.CylinderGeometry(R, R, 0.08, 18), 0, 0.02, 0, gold)
     for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; add(new THREE.ConeGeometry(0.05, 0.11, 6), Math.sin(a) * R * 0.86, 0.11, Math.cos(a) * R * 0.86, gold) }
     add(new THREE.SphereGeometry(0.035, 8, 6), 0, 0.03, R + 0.01, mat(color))
+  } else if (type === 'chef') {
+    const white = mat(0xffffff)
+    add(new THREE.CylinderGeometry(R * 0.95, R, 0.16, 18), 0, 0.06, 0, white)
+    for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2; add(new THREE.SphereGeometry(R * 0.55, 12, 10), Math.sin(a) * R * 0.45, 0.2, Math.cos(a) * R * 0.45, white) }
+    add(new THREE.CylinderGeometry(R * 1.01, R * 1.02, 0.04, 18), 0, 0.01, 0)
+  } else if (type === 'bow') {
+    add(new THREE.SphereGeometry(0.045, 10, 8), R * 0.55, 0.02, R * 0.2)
+    for (const s of [-1, 1]) { const w = add(new THREE.ConeGeometry(0.07, 0.13, 4), R * 0.55 + s * 0.08, 0.02, R * 0.2); w.rotation.z = s * Math.PI / 2 }
+  } else if (type === 'headphones') {
+    const dark = mat(0x38383d)
+    add(new THREE.TorusGeometry(R * 1.32, 0.025, 8, 24, Math.PI), 0, -0.12, 0, dark)
+    for (const s of [-1, 1]) { const cup = add(new THREE.CylinderGeometry(0.085, 0.085, 0.06, 14), s * R * 1.32, -0.14, 0); cup.rotation.z = Math.PI / 2 }
+  } else if (type === 'party') {
+    add(new THREE.ConeGeometry(R * 0.6, 0.32, 14), 0, 0.14, 0)
+    add(new THREE.SphereGeometry(0.04, 8, 6), 0, 0.31, 0, mat(0xfff4e0))
   }
   return g
 }
