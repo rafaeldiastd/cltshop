@@ -295,7 +295,7 @@ watch(() => shelf.value?.broken, (isBroken) => {
 <style scoped>
 .panel {
   position: fixed;
-  right: 12px;
+  right: 84px; /* ao lado da barra de avatares, no mesmo lugar do painel do cliente */
   top: 72px;
   width: 340px;
   z-index: 12;

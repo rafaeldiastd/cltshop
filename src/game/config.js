@@ -245,7 +245,8 @@ export const SHELF_BOOST = [
 ]
 
 // ---------- delivery pelo Zap da Lojinha ----------
-export const DELIVERY = { fee: 4, rate: 0.08, maxOpen: 2, pick: 3, ride: [35, 55] }
+// pedidos: a cada `every` segundos sorteia se chega um (chance `rate`, multiplicada pelo clima: frio traz mais pedidos, calor traz mais bebidas)
+export const DELIVERY = { fee: 4, rate: 0.15, every: 25, maxOpen: 2, pick: 3, ride: [35, 55], weather: { hot: { rate: 1, drinks: 3 }, mild: { rate: 1, drinks: 1 }, cold: { rate: 1.8, drinks: 0.5 } } }
 
 // ---------- contratos com fornecedores: comprar muito do mesmo produto libera caixas maiores com desconto ----------
 // at = unidades já compradas daquele produto

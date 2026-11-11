@@ -1,11 +1,12 @@
 import { reactive, watch } from 'vue'
 import { PRODUCTS, PID, LEVELS, STAFF, START_MONEY, PACK, DAY_SECONDS, DECOR, EVENTS, WEATHER, EXPRESS_FEE, CAFE_ID, CAFE_MENU, SHELF_CAP, SHELF_CAP_BIG, CAREER_ID, careerNext, CONTRACTS, SHELF_BOOST, PASS, DOORMAT, RUMOR, canStockProduct } from './config.js'
 import { makePerson } from './people.js'
+import { AVATAR_PARTS, defaultAvatar } from './avatarData.js'
 import { basePlan, planArea, stockRoom, defaultRegister, defaultShelves, defaultFreezers, defaultProduce, produceSlots, defaultDecor, usableDecor, settleLayout } from './layout.js'
 
 let _id = 1
 export const uid = () => _id++
-export const hooks = { refreshGrid: () => {}, beforeSave: () => {}, shiftActors: () => {} }
+export const hooks = { refreshGrid: () => {}, beforeSave: () => {}, afterSave: () => {}, shiftActors: () => {} }
 
 export const newStats = () => ({ revenue: 0, units: 0, cogs: 0, customers: 0, served: 0, sold: {}, oos: {}, price: {}, patience: 0, lostValue: 0, moods: {}, stolen: 0, stolenUnits: 0, caught: 0, cafeSales: 0, cafeRevenue: 0, lunchMissed: 0, deliveries: 0, deliveryRevenue: 0, arcadeRevenue: 0, petFound: 0, petFinds: 0, impulse: 0, xp: 0, maintenance: 0, spoiled: 0, spoiledValue: 0, cleaned: 0, dirty: 0 })
 const noMarket = () => ({ text: null, mods: {} })
@@ -59,6 +60,8 @@ export const ui = reactive({
   computerApp: 'products', // products | store
   selectedBox: null,
   panelShelf: null,
+  npc: null, // id do cliente aberto no painel lateral
+  npcInfo: null, // resumo atualizado desse cliente (nome, idade, o que buscou e comprou)
   hover: null,
   mouse: { x: 0, y: 0 },
   log: [],
@@ -90,6 +93,9 @@ function readSettings() {
   try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {} } catch (e) { return {} }
 }
 export const settings = reactive({ character: 0, hat: 'none', hatColor: '#ef8a77', pet: 'cat', musicOn: true, sfxOn: true, volume: 0.8, playlist: null, ...readSettings() })
+// personagem montado (cabeça, corpo, cores e acessórios). Quem já jogava continua com o visual
+// escolhido antes: cabeça e corpo do mesmo modelo, cores originais e o mesmo chapéu
+if (!settings.avatar) settings.avatar = { ...defaultAvatar(AVATAR_PARTS[settings.character] || AVATAR_PARTS[0]), hat: settings.hat, hatColor: settings.hatColor }
 watch(settings, () => {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch (e) { /* ignore */ }
 })
@@ -497,10 +503,27 @@ export function setDoormat(text, color) {
 }
 
 // ---------- save ----------
-const KEY = 'lojinha-lofi-v1'
+export const SAVE_KEY = 'lojinha-lofi-v1'
+const KEY = SAVE_KEY
+// versão do save: só cresce. Fica também numa chave própria, que sobrevive ao "recomeçar",
+// para o jogo novo não perder para o save antigo guardado na nuvem
+const REV_KEY = 'lojinha-lofi-rev'
+let rev = 0
+export const saveMeta = { locked: false } // travado quando o jogo foi aberto em outra aba ou aparelho
+export function localRev() {
+  let r = 0
+  try { r = Number(localStorage.getItem(REV_KEY)) || 0 } catch (e) { /* ignore */ }
+  try { r = Math.max(r, JSON.parse(localStorage.getItem(KEY))?._rev || 0) } catch (e) { /* ignore */ }
+  return Math.max(r, rev)
+}
+// troca o save local por um mais novo (vindo da nuvem), antes do load()
+export function replaceLocalSave(data, r) {
+  localStorage.setItem(KEY, JSON.stringify({ ...data, _rev: r }))
+  localStorage.setItem(REV_KEY, String(r))
+}
 let restarting = false // ao recomeçar, o salvamento automático não pode regravar o jogo antigo
 export function save() {
-  if (restarting) return
+  if (restarting || saveMeta.locked) return
   try {
     hooks.beforeSave()
     const d = JSON.parse(JSON.stringify(game))
@@ -509,14 +532,19 @@ export function save() {
     d.shelves = d.shelves.filter((s) => s.x >= 0)
     d.decor = d.decor.filter((o) => o.x >= 0)
     if (d.cafe && d.cafe.x < 0) d.cafe = null
-    localStorage.setItem(KEY, JSON.stringify({ ...d, cart: ui.cart, log: ui.log }))
+    rev = Math.max(rev, Number(localStorage.getItem(REV_KEY)) || 0) + 1
+    const json = JSON.stringify({ ...d, cart: ui.cart, log: ui.log, _rev: rev })
+    localStorage.setItem(KEY, json)
+    localStorage.setItem(REV_KEY, String(rev))
+    hooks.afterSave(json, rev, game.day)
   } catch (e) { /* ignore */ }
 }
 export function load() {
   try {
+    rev = localRev()
     const raw = localStorage.getItem(KEY)
     if (!raw) return false
-    const { cart, log, ...d } = JSON.parse(raw)
+    const { cart, log, _rev, ...d } = JSON.parse(raw)
     // saves de versões anteriores não têm os campos novos: entram os valores padrão
     Object.assign(game, { market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {}, plan: basePlan(d.level || 0), career: newCareer(), recipes: {}, orders: [], zapOn: true, team: [], candidates: [], pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null }, d, { speed: 1, paused: false })
     delete game.staff
