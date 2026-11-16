@@ -66,47 +66,11 @@ let supaSubscribed = false
 let hostAlive = false
 let lastSupaPush = 0
 let lastDirFetch = 0
-const localLobby = new Map()
 const dirLobby = new Map()
 let supaLobby = []
 
 const snap = (v) => JSON.parse(JSON.stringify(v))
-
-function readLocalDir() {
-  try { return JSON.parse(localStorage.getItem(DIR_KEY)) || {} } catch (e) { return {} }
-}
-function writeLocalDir(dir) {
-  try { localStorage.setItem(DIR_KEY, JSON.stringify(dir)) } catch (e) { /* ignore */ }
-}
-
-function publishToLocalDir(info, snapshot) {
-  const dir = readLocalDir()
-  const existing = dir[info.code]
-  const pendingTips = Number(existing?.tipsPending) || 0
-  if (pendingTips > 0) {
-    game.money += pendingTips
-    game.rep = Math.min(5, game.rep + 0.05)
-    sfx('coin')
-    toast(`💝 Você recebeu ${money(pendingTips)} em gorjetas de visitantes!`, 'good')
-  }
-  dir[info.code] = {
-    code: info.code,
-    storeName: info.storeName,
-    region: info.region,
-    level: info.level,
-    rep: info.rep,
-    openToVisitors: mp.openToVisitors,
-    snapshot,
-    tipsPending: 0,
-    updatedAt: Date.now(),
-  }
-  // Limpa lojas muito antigas (mais de 7 dias)
-  const cutoff = Date.now() - 7 * 86400 * 1000
-  for (const [k, v] of Object.entries(dir)) {
-    if ((v.updatedAt || 0) < cutoff) delete dir[k]
-  }
-  writeLocalDir(dir)
-}
+try { localStorage.removeItem(DIR_KEY) } catch (e) { /* ignore */ }
 
 async function publishToSupabase(force = false) {
   if (!sb || mp.visiting || pendingVisit) return
@@ -117,6 +81,7 @@ async function publishToSupabase(force = false) {
     const { data: { session } } = await sb.auth.getSession()
     if (!session?.user?.id) return
     mp.supaConnected = true
+    await sb.from('store_directory').delete().eq('user_id', session.user.id).neq('code', mp.myCode)
     const snapshot = buildStoreSnapshot()
     await sb.from('store_directory').upsert({
       code: mp.myCode,
@@ -143,14 +108,12 @@ async function publishToSupabase(force = false) {
 
 export async function fetchDirectoryStores() {
   dirLobby.clear()
-  const localDir = readLocalDir()
-  for (const s of Object.values(localDir)) {
-    if (s?.code && s.code !== mp.myCode && s.openToVisitors !== false && s.snapshot) {
-      dirLobby.set(s.code, { ...s, live: false })
-    }
-  }
   if (sb) {
     try {
+      const { data: { session } } = await sb.auth.getSession()
+      if (session?.user?.id) {
+        await sb.from('store_directory').delete().eq('user_id', session.user.id).neq('code', mp.myCode)
+      }
       const { data } = await sb
         .from('store_directory')
         .select('code,store_name,region,level,rep,open_to_visitors,snapshot,updated_at')
@@ -179,12 +142,9 @@ export async function fetchDirectoryStores() {
 }
 
 function refreshOnlineList() {
-  const now = Date.now()
-  for (const [id, entry] of localLobby) if (now - entry.ts > 7500) localLobby.delete(id)
   const merged = new Map()
   for (const [code, s] of dirLobby) if (code && code !== mp.myCode) merged.set(code, s)
   for (const s of supaLobby) if (s.code && s.code !== mp.myCode) merged.set(s.code, { ...merged.get(s.code), ...s, live: true })
-  for (const s of localLobby.values()) if (s.code && s.code !== mp.myCode) merged.set(s.code, { ...s, live: true })
   mp.onlineStores = [...merged.values()]
 }
 
@@ -452,10 +412,9 @@ function announceLobby() {
       visitors: mp.visitors.length,
       ts: Date.now(),
     }
-    publishToLocalDir(info, snapshot)
     publishToSupabase(false)
     if (mp.openToVisitors) {
-      sendLobbyMsg({ type: 'lobby', info: { ...info, snapshot } })
+      sendLobbyMsg({ type: 'lobby', info })
       if (lobbyCh) {
         try { lobbyCh.track(info) } catch (e) { /* ignore */ }
       }
@@ -529,11 +488,6 @@ export function startMultiplayer() {
       if (data.channel === 'lobby') {
         if (data.type === 'lobby' && data.info?.id !== MY_ID) {
           resolveTabCodeConflict(data.info)
-          localLobby.set(data.info.id, { ...data.info, ts: Date.now() })
-          refreshOnlineList()
-        } else if (data.type === 'lobby_bye' && data.id) {
-          localLobby.delete(data.id)
-          refreshOnlineList()
         } else if (data.type === 'ping' && data.id !== MY_ID) {
           announceLobby()
         }
@@ -602,13 +556,7 @@ export async function visitStore(rawCode) {
   // 1. Checa lista em memória
   let snapshot = mp.onlineStores.find((s) => s.code === code)?.snapshot || null
 
-  // 2. Checa diretório local (localStorage)
-  if (!snapshot) {
-    const localEntry = readLocalDir()[code]
-    if (localEntry?.openToVisitors !== false && localEntry?.snapshot) snapshot = localEntry.snapshot
-  }
-
-  // 3. Checa Supabase (store_directory)
+  // 2. Checa Supabase (store_directory)
   if (!snapshot && sb) {
     try {
       const { data } = await sb.from('store_directory').select('*').eq('code', code).maybeSingle()
@@ -705,16 +653,8 @@ export async function sendTip() {
 
   if (hostAlive) {
     sendRoomMsg({ type: 'tip', fromName: displayUser(), amount, xp })
-  } else {
-    // Anfitrião offline ou carregado pelo diretório: grava a gorjeta pendente para resgate
-    const dir = readLocalDir()
-    if (dir[code]) {
-      dir[code].tipsPending = (Number(dir[code].tipsPending) || 0) + amount
-      writeLocalDir(dir)
-    }
-    if (sb) {
-      try { await sb.rpc('send_store_tip', { p_code: code, p_amount: amount }) } catch (e) { /* ignore */ }
-    }
+  } else if (sb) {
+    try { await sb.rpc('send_store_tip', { p_code: code, p_amount: amount }) } catch (e) { /* ignore */ }
   }
   toast(xp > 0 ? `💝 Gorjeta de ${money(amount)} enviada! Você ganhou +${xp} XP!` : `💝 Gorjeta de ${money(amount)} enviada (não ganhará XP)!`, 'good')
 }

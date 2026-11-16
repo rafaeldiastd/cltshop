@@ -53,12 +53,6 @@ function goVisit() {
         </div>
       </section>
 
-      <section class="conn-status" :class="{ ok: mp.supaConnected }">
-        <span v-if="mp.supaConnected">🟢 Conectado ao Supabase (visitas entre aparelhos ativas)</span>
-        <span v-else-if="mp.hasSupabase">🟡 Conectando ao Supabase…</span>
-        <span v-else>🟡 Modo Local (mesmo navegador · para cruzar aparelhos, configure <code>.env.local</code> e execute <code>002_multiplayer.sql</code> no Supabase)</span>
-      </section>
-
       <section class="card-in">
         <b><PhSignIn weight="duotone" /> Visitar pelo código</b>
         <div class="join-row">
@@ -119,8 +113,6 @@ h3 { margin: 4px 0 6px; font-size: 1em; display: flex; align-items: center; gap:
 .code-mini { font-size: 11px; opacity: .6; font-weight: 700; }
 .visitors { display: flex; flex-wrap: wrap; gap: 6px; }
 .v-chip { background: #e0f2fe; color: #075985; padding: 4px 10px; border-radius: 99px; font-weight: 700; font-size: 13px; }
-.conn-status { background: #fef3c7; color: #92400e; padding: 7px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; }
-.conn-status.ok { background: #dcfce7; color: #166534; }
 .list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .live-dot { color: #16a34a; font-size: 10px; }
 </style>
