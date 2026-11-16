@@ -1,5 +1,5 @@
 import { reactive, watch } from 'vue'
-import { PRODUCTS, PID, LEVELS, STAFF, START_MONEY, PACK, DAY_SECONDS, DECOR, EVENTS, WEATHER, EXPRESS_FEE, CAFE_ID, CAFE_MENU, SHELF_CAP, SHELF_CAP_BIG, CAREER_ID, careerNext, CONTRACTS, SHELF_BOOST, PASS, DOORMAT, RUMOR, canStockProduct } from './config.js'
+import { PRODUCTS, PID, LEVELS, STAFF, START_MONEY, PACK, DAY_SECONDS, DECOR, EVENTS, WEATHER, EXPRESS_FEE, CAFE_ID, CAFE_MENU, SHELF_CAP, SHELF_CAP_BIG, CAREER_ID, careerNext, CONTRACTS, SHELF_BOOST, PASS, DOORMAT, RUMOR, canStockProduct, shelfLifeOf, GAME_MODES, REGIONS } from './config.js'
 import { makePerson } from './people.js'
 import { AVATAR_PARTS, defaultAvatar } from './avatarData.js'
 import { basePlan, planArea, stockRoom, defaultRegister, defaultShelves, defaultFreezers, defaultProduce, produceSlots, defaultDecor, usableDecor, settleLayout } from './layout.js'
@@ -8,9 +8,11 @@ let _id = 1
 export const uid = () => _id++
 export const hooks = { refreshGrid: () => {}, beforeSave: () => {}, afterSave: () => {}, shiftActors: () => {} }
 
-export const newStats = () => ({ revenue: 0, units: 0, cogs: 0, customers: 0, served: 0, sold: {}, oos: {}, price: {}, patience: 0, lostValue: 0, moods: {}, stolen: 0, stolenUnits: 0, caught: 0, cafeSales: 0, cafeRevenue: 0, lunchMissed: 0, deliveries: 0, deliveryRevenue: 0, arcadeRevenue: 0, petFound: 0, petFinds: 0, impulse: 0, xp: 0, maintenance: 0, spoiled: 0, spoiledValue: 0, cleaned: 0, dirty: 0 })
+export const newStats = () => ({ revenue: 0, units: 0, cogs: 0, customers: 0, served: 0, sold: {}, oos: {}, price: {}, patience: 0, lostValue: 0, moods: {}, stolen: 0, stolenUnits: 0, caught: 0, cafeSales: 0, cafeRevenue: 0, lunchMissed: 0, deliveries: 0, deliveryRevenue: 0, arcadeRevenue: 0, petFound: 0, petFinds: 0, impulse: 0, xp: 0, maintenance: 0, spoiled: 0, spoiledValue: 0, cleaned: 0, dirty: 0, expired: 0, expiredValue: 0, sanitaryFine: 0, branchRevenue: 0 })
 const noMarket = () => ({ text: null, mods: {} })
 const newCareer = () => ({ xp: 0, earned: 0, points: 0, perks: {} })
+const newPomodoro = () => ({ focusMin: 25, breakMin: 5, autoCycle: true, autoRestock: true, autoPilot: true, sessions: 0 })
+const newLifetime = () => ({ served: 0, revenue: 0, robberiesStopped: 0 })
 
 export const game = reactive({
   day: 1,
@@ -53,10 +55,22 @@ export const game = reactive({
   goalsDay: 0,
   dirt: [], // manchas no chão: { id, x, z, type, level }
   doormat: null, // tapete de entrada comprado: { text, color }
+  mode: 'normal', // lofi | normal | hardcore
+  pomodoro: newPomodoro(),
+  region: 'residencial',
+  branchId: 'main',
+  branchName: 'Matriz',
+  branches: [],
+  lifetime: newLifetime(),
+  bigGoals: { claimed: {} },
+  visitedPet: null,
+  tipCount: 0,
+  playerName: 'Lojista',
+  shopName: 'Lojinha Lofi',
 })
 
 export const ui = reactive({
-  modal: null, // summary | computer | menu
+  modal: null, // summary | computer | menu | multiplayer | start
   computerApp: 'products', // products | store
   selectedBox: null,
   panelShelf: null,
@@ -85,6 +99,9 @@ export const ui = reactive({
   buyTool: null, // modo layout: móvel que continua sendo comprado a cada clique (shelf | fridge | meat | produce)
   produceStyle: 'island', // formato do próximo expositor de hortifruti
   shelfType: 'std', // tipo da próxima prateleira: std | wall | corner
+  pomoBreakLeft: 0, // contagem regressiva da pausa Pomodoro (segundos)
+  chatBubbles: [],
+  prankMode: 'swap_price',
 })
 
 // preferências ficam fora do save: sobrevivem a um "Novo jogo"
@@ -92,7 +109,7 @@ const SETTINGS_KEY = 'lojinha-lofi-settings'
 function readSettings() {
   try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {} } catch (e) { return {} }
 }
-export const settings = reactive({ character: 0, hat: 'none', hatColor: '#ef8a77', pet: 'cat', musicOn: true, sfxOn: true, volume: 0.8, playlist: null, ...readSettings() })
+export const settings = reactive({ character: 0, hat: 'none', hatColor: '#ef8a77', pet: 'cat', musicOn: true, sfxOn: true, volume: 0.8, playlist: null, storeCode: '', storeName: 'Lojinha Lofi', playerName: 'Lojista', prankDay: '', prankCount: 0, ...readSettings() })
 // personagem montado (cabeça, corpo, cores e acessórios). Quem já jogava continua com o visual
 // escolhido antes: cabeça e corpo do mesmo modelo, cores originais e o mesmo chapéu
 if (!settings.avatar) settings.avatar = { ...defaultAvatar(AVATAR_PARTS[settings.character] || AVATAR_PARTS[0]), hat: settings.hat, hatColor: settings.hatColor }
@@ -100,13 +117,46 @@ watch(settings, () => {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch (e) { /* ignore */ }
 })
 
+export const modeMods = () => GAME_MODES[game.mode] || GAME_MODES.normal
+export const regionOf = (r = game.region) => REGIONS[r] || REGIONS.residencial
+export const regionMods = (r = game.region) => regionOf(r).mods
+export const daySeconds = () => (game.mode === 'lofi' ? Math.max(60, (game.pomodoro?.focusMin || 25) * 60) : DAY_SECONDS)
+
+export const MAX_DAILY_PRANKS = 3
+export const utcDayKey = () => new Date().toISOString().slice(0, 10)
+export function pranksLeft() {
+  const today = utcDayKey()
+  if (settings.prankDay !== today) return MAX_DAILY_PRANKS
+  return Math.max(0, MAX_DAILY_PRANKS - (settings.prankCount || 0))
+}
+export function usePrankQuota() {
+  const today = utcDayKey()
+  if (settings.prankDay !== today) {
+    settings.prankDay = today
+    settings.prankCount = 0
+  }
+  if (settings.prankCount >= MAX_DAILY_PRANKS) return false
+  settings.prankCount++
+  return true
+}
+export const PRANK_TYPES = [
+  { id: 'swap_price', name: 'Trocar Preço', emoji: '🏷️', minLevel: 0, target: 'shelf' },
+  { id: 'pee', name: 'Mijar no Chão', emoji: '🚽', minLevel: 1, target: 'floor' },
+  { id: 'unstock', name: 'Esvaziar Prateleira', emoji: '📦', minLevel: 2, target: 'shelf' },
+]
+export const MAX_TIPS = 10
+export const tipsLeft = () => Math.max(0, MAX_TIPS - (game.tipCount || 0))
+export const nextTipCost = () => 10 * Math.pow(2, Math.min(MAX_TIPS, game.tipCount || 0))
+export const nextTipXp = () => Math.max(0, 10 - (game.tipCount || 0))
+
 export const money = (n) => 'R$ ' + (Math.round(n * 100) / 100).toFixed(2).replace('.', ',')
 export const isClosed = () => game.phase === 'prep' || game.phase === 'night' || game.phase === 'lunch'
 export const canExpand = () => game.phase === 'prep' || game.phase === 'night'
 export function clockText() {
   if (game.phase === 'prep') return '08:30'
   if (game.phase === 'night') return '21:00'
-  const h = 9 + (Math.min(game.clock, DAY_SECONDS) / DAY_SECONDS) * 12
+  const dur = daySeconds()
+  const h = 9 + (Math.min(game.clock, dur) / dur) * 12
   return String(Math.floor(h)).padStart(2, '0') + ':' + String(Math.floor((h % 1) * 60)).padStart(2, '0')
 }
 
@@ -133,8 +183,13 @@ export function toast(msg, kind = 'info') {
   }, TOAST_MS)
 }
 
-export function newGame() {
+export function newGame(opts = {}) {
   const plan = basePlan(0)
+  const pName = String(opts.playerName ?? settings.playerName ?? 'Lojista').trim() || 'Lojista'
+  const sName = String(opts.shopName ?? settings.storeName ?? 'Lojinha Lofi').trim() || 'Lojinha Lofi'
+  const mode = opts.mode && GAME_MODES[opts.mode] ? opts.mode : 'normal'
+  settings.playerName = pName
+  settings.storeName = sName
   Object.assign(game, {
     day: 1, phase: 'prep', clock: 0, speed: 1, paused: false, money: START_MONEY, rep: 3, level: 0, plan,
     unlocked: Object.fromEntries(PRODUCTS.filter((p) => p.start).map((p) => [p.id, true])),
@@ -143,6 +198,8 @@ export function newGame() {
     today: newStats(), summary: null, playerPos: null, market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {},
     career: newCareer(), bought: {}, recipes: {}, orders: [], zapOn: true, decorV2: true,
     pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null,
+    mode, pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: sName, shopName: sName, playerName: pName, branches: [],
+    lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0,
   })
   ui.build = null
   ui.cart = {}
@@ -152,6 +209,8 @@ export function newGame() {
   ui.modal = null
   ui.log = []
   ui.toasts = []
+  ui.pomoBreakLeft = 0
+  ui.prankMode = 'swap_price'
   // prateleiras iniciais + caixas da primeira entrega
   // começa com 3 prateleiras e 1 expositor de hortifruti (abaixo); freezers e decoração se compram depois
   for (const s of defaultShelves(plan)) addShelf(s)
@@ -160,7 +219,7 @@ export function newGame() {
     addShelf({ ...s, kind: 'produce', groupId })
   }
   for (const p of PRODUCTS.filter((p) => p.start)) {
-    game.boxes.push({ id: uid(), product: p.id, count: PACK, state: 'dock', res: null })
+    game.boxes.push({ id: uid(), product: p.id, count: PACK, state: 'dock', res: null, daysLeft: shelfLifeOf(p.id) })
     game.bought[p.id] = PACK
   }
   discoverRecipes(false)
@@ -187,7 +246,8 @@ export function addShelf(spot) {
     broken: false,
     brokenT: 0,
     call: null,
-    techAt: null
+    techAt: null,
+    daysLeft: null,
   })
   hooks.refreshGrid()
 }
@@ -206,8 +266,9 @@ export function buyPerk(id) {
 export const xpNext = () => careerNext(game.career.earned)
 export function gainXp(n = 1) {
   const c = game.career
-  c.xp += n
-  game.today.xp += n
+  const pts = Math.max(1, Math.round(n * modeMods().xpMult))
+  c.xp += pts
+  game.today.xp += pts
   while (c.xp >= careerNext(c.earned)) {
     c.xp -= careerNext(c.earned)
     c.earned++
@@ -252,7 +313,7 @@ const mod = (pid) => game.market?.mods?.[pid] || {}
 const cents = (n) => Math.round(n * 100) / 100
 export const costOf = (pid) => cents(PID[pid].cost * (mod(pid).cost ?? 1))
 export const refOf = (pid) => cents(PID[pid].ref * (mod(pid).ref ?? 1))
-export const demandOf = (pid) => PID[pid].demand * (mod(pid).demand ?? 1) * (PID[pid].cold && !PID[pid].steady ? WEATHER[game.weather]?.cold ?? 1 : 1)
+export const demandOf = (pid) => PID[pid].demand * (mod(pid).demand ?? 1) * (PID[pid].cold && !PID[pid].steady ? WEATHER[game.weather]?.cold ?? 1 : 1) * (regionMods().sections?.[PID[pid].section] ?? 1) * (PID[pid].cold ? (regionMods().coldDemand ?? 1) : 1)
 export const costChange = (pid) => Math.round(((mod(pid).cost ?? 1) - 1) * 100)
 
 // ---------- preços da cafeteria: custo e mercado seguem a média dos ingredientes ----------
@@ -364,7 +425,7 @@ export function placeOrder() {
   discoverRecipes()
   ui.cart = {}
   if (isExpress()) {
-    for (const c of items) for (let i = 0; i < c.n; i++) game.boxes.push({ id: uid(), product: c.pid, count: c.size, state: 'dock', res: null })
+    for (const c of items) for (let i = 0; i < c.n; i++) game.boxes.push({ id: uid(), product: c.pid, count: c.size, state: 'dock', res: null, daysLeft: shelfLifeOf(c.pid) })
     toast(`Entrega expressa na calçada! Taxa de ${money(fee)}`, 'good')
     return true
   }
@@ -386,6 +447,23 @@ export function setPrice(pid, value) {
   for (const s of game.shelves) if (s.product === pid) s.price = price
 }
 export const stepPrice = (pid, d) => setPrice(pid, (productPrice(pid) ?? refOf(pid)) + d)
+export function discardExpiredShelf(id) {
+  const s = game.shelves.find((x) => x.id === id)
+  if (!s || !s.count || !s.product) return
+  game.today.expired += s.count
+  game.today.expiredValue += s.count * costOf(s.product)
+  const name = PID[s.product]?.name || 'Produto'
+  s.count = 0; s.daysLeft = null; s.product = null; s.price = null
+  toast(`${name} vencido descartado`, 'info')
+}
+export function applyClearanceDiscount(id) {
+  const s = game.shelves.find((x) => x.id === id)
+  if (!s || !s.product) return
+  const base = productPrice(s.product) ?? refOf(s.product)
+  const disc = Math.max(0.2, Math.round(base * 0.7 * 100) / 100)
+  setPrice(s.product, disc)
+  toast(`Queima de estoque: ${PID[s.product].name} por ${money(disc)} (−30%)`, 'good')
+}
 // destaque: a prateleira chama mais atenção para o produto que está nela
 export function upgradeShelf(id) {
   const s = game.shelves.find((x) => x.id === id)
@@ -421,7 +499,7 @@ function byArea(field, plan) {
   const [a0, v0] = pts[i], [a1, v1] = pts[i + 1]
   return v0 + ((a - a0) * (v1 - v0)) / (a1 - a0)
 }
-export const customersPerDay = (plan = game.plan) => byArea('customers', plan)
+export const customersPerDay = (plan = game.plan) => byArea('customers', plan) * regionMods().customers
 export const maxCustomers = (plan = game.plan) => Math.round(byArea('maxCust', plan))
 export const stockFull = () => stockCount() >= stockCap()
 export const maxShelves = () => LEVELS[game.level].maxShelves
@@ -485,7 +563,100 @@ export function upgradeType() {
   toast(`Agora o seu comércio é ${next.name}!`, 'good')
 }
 // salário de todos os contratados, inclusive de quem está de folga
-export const wages = () => game.team.reduce((s, m) => s + m.wage, 0)
+export const wages = () => Math.round(game.team.reduce((s, m) => s + m.wage, 0) * modeMods().wageMult * regionMods().wageMult)
+
+// ---------- regiões e filiais ----------
+export const hasRegionBranch = (regionId) => game.region === regionId || (game.branches || []).some((b) => b.region === regionId)
+export const allBranches = () => [
+  { id: game.branchId, name: game.branchName, region: game.region, level: game.level, shelves: game.shelves, team: game.team, cafe: game.cafe, active: true },
+  ...(game.branches || []).map((b) => ({ ...b, active: false })),
+]
+export function branchDailyProfit(b) {
+  const rMods = (REGIONS[b.region] || REGIONS.residencial).mods
+  const stocked = (b.shelves || []).filter((s) => s.product && s.count > 0 && s.price != null).length
+  const teamWages = Math.round((b.team || []).reduce((s, m) => s + (m.wage || 30), 0) * modeMods().wageMult * rMods.wageMult)
+  const gross = Math.round((75 + stocked * 24 + (b.level || 0) * 65 + (b.cafe ? 40 : 0)) * rMods.customers * rMods.willing)
+  return gross - teamWages
+}
+export function changeMainRegion(regionId) {
+  const reg = REGIONS[regionId]
+  if (!reg || regionId === game.region) return
+  if (game.day === 1 && game.phase === 'prep' && !game.branches.length) {
+    game.region = regionId
+    toast(`Região definida: ${reg.name} ${reg.emoji}`, 'good')
+    return
+  }
+  if (!isClosed()) return toast('Mude de região com a loja fechada', 'bad')
+  if (hasRegionBranch(regionId)) return toast('Você já possui uma loja nesta região', 'bad')
+  const fee = 300
+  if (game.money < fee) return toast(`Caixa insuficiente para mudança (${money(fee)})`, 'bad')
+  game.money -= fee
+  game.region = regionId
+  toast(`Loja transferida para ${reg.name} ${reg.emoji}`, 'good')
+}
+export function buyBranch(regionId) {
+  const reg = REGIONS[regionId]
+  if (!reg) return
+  if (!isClosed()) return toast('Abra filiais apenas com a loja fechada', 'bad')
+  if (hasRegionBranch(regionId)) return toast('Já existe uma unidade nessa região', 'bad')
+  if (game.money < reg.cost) return toast('Caixa insuficiente', 'bad')
+  game.money -= reg.cost
+  const plan = basePlan(0)
+  const shelves = []
+  for (const s of defaultShelves(plan)) {
+    shelves.push({ id: uid(), x: s.x, z: s.z, rot: s.rot || 0, product: null, count: 0, price: null, kind: s.kind || 'shelf', fridge: false, boost: 0, wear: 0, broken: false, brokenT: 0, call: null, techAt: null, daysLeft: null })
+  }
+  const dp = defaultProduce(plan), groupId = 'produce_' + uid()
+  for (const s of produceSlots(dp.x, dp.z, dp.rot, dp.style)) {
+    shelves.push({ id: uid(), x: s.x, z: s.z, rot: s.rot || 0, groupId, slot: s.slot, style: s.style, level: s.level, reach: s.reach, grot: s.grot || 0, product: null, count: 0, price: null, kind: 'produce', fridge: false, boost: 0, wear: 0, broken: false, brokenT: 0, call: null, techAt: null, daysLeft: null })
+  }
+  const boxes = PRODUCTS.filter((p) => p.start).map((p) => ({ id: uid(), product: p.id, count: PACK, state: 'dock', res: null, daysLeft: shelfLifeOf(p.id) }))
+  game.branches.push({
+    id: 'branch_' + uid(),
+    name: `Filial ${reg.name}`,
+    region: regionId,
+    level: 0,
+    plan,
+    shelves,
+    register: defaultRegister(plan),
+    decor: defaultDecor(plan).map((d) => ({ id: uid(), ...d })),
+    boxes,
+    pending: [],
+    team: [],
+    cafe: null,
+    doormat: null,
+    dirt: [],
+  })
+  toast(`🏢 Nova filial inaugurada em ${reg.name}!`, 'good')
+}
+export function switchBranch(targetId) {
+  if (!isClosed()) return toast('Troque de filial apenas com a loja fechada', 'bad')
+  if (ui.editing || ui.build) return toast('Saia do modo layout/obra antes de trocar de filial', 'bad')
+  if (targetId === game.branchId) return
+  const idx = game.branches.findIndex((b) => b.id === targetId)
+  if (idx < 0) return
+  const snap = (v) => JSON.parse(JSON.stringify(v))
+  const cur = {
+    id: game.branchId, name: game.branchName, region: game.region, level: game.level,
+    plan: snap(game.plan), shelves: snap(game.shelves), register: snap(game.register),
+    decor: snap(game.decor), boxes: snap(game.boxes), pending: snap(game.pending),
+    team: snap(game.team), cafe: snap(game.cafe), doormat: snap(game.doormat), dirt: snap(game.dirt),
+  }
+  const next = game.branches.splice(idx, 1, cur)[0]
+  Object.assign(game, {
+    branchId: next.id, branchName: next.name, region: next.region, level: next.level || 0,
+    plan: next.plan, shelves: next.shelves || [], register: next.register || defaultRegister(next.plan),
+    decor: next.decor || [], boxes: next.boxes || [], pending: next.pending || [],
+    team: next.team || [], cafe: next.cafe || null, doormat: next.doormat || null, dirt: next.dirt || [],
+  })
+  game.shelves.forEach((s) => { s.id = uid(); s.techAt = null })
+  game.boxes.forEach((b) => { b.id = uid(); b.res = null })
+  game.decor.forEach((d) => { d.id = uid() })
+  game.dirt.forEach((d) => { d.id = uid(); d.res = null })
+  ui.selectedBox = null; ui.panelShelf = null; ui.panelCafe = false; ui.npc = null
+  hooks.refreshGrid()
+  toast(`📍 Gerenciando: ${game.branchName} (${regionOf().name})`, 'good')
+}
 
 // ---------- tapete de entrada ----------
 export const cleanMatText = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, DOORMAT.maxText)
@@ -508,6 +679,53 @@ const KEY = SAVE_KEY
 // versão do save: só cresce. Fica também numa chave própria, que sobrevive ao "recomeçar",
 // para o jogo novo não perder para o save antigo guardado na nuvem
 const REV_KEY = 'lojinha-lofi-rev'
+const SAVES_INDEX_KEY = 'lojinha-lofi-saves-v1'
+const ACTIVE_SAVE_KEY = 'lojinha-lofi-active-save'
+const slotKey = (id) => 'lojinha-save-slot-' + id
+export const savesList = reactive([])
+
+function readSavesIndex() {
+  try { return JSON.parse(localStorage.getItem(SAVES_INDEX_KEY)) || [] } catch (e) { return [] }
+}
+function writeSavesIndex(list) {
+  savesList.splice(0, savesList.length, ...list)
+  try { localStorage.setItem(SAVES_INDEX_KEY, JSON.stringify(list)) } catch (e) { /* ignore */ }
+}
+export function getActiveSaveId() {
+  try { return localStorage.getItem(ACTIVE_SAVE_KEY) || '' } catch (e) { return '' }
+}
+function setActiveSaveId(id) {
+  try { localStorage.setItem(ACTIVE_SAVE_KEY, id) } catch (e) { /* ignore */ }
+}
+export function refreshSavesList() {
+  let list = readSavesIndex()
+  const rawLegacy = localStorage.getItem(KEY)
+  if (!list.length && rawLegacy) {
+    try {
+      const d = JSON.parse(rawLegacy)
+      const id = 'save_main'
+      localStorage.setItem(slotKey(id), rawLegacy)
+      setActiveSaveId(id)
+      list = [{
+        id,
+        playerName: d.playerName || settings.playerName || 'Lojista',
+        shopName: d.shopName || d.branchName || settings.storeName || 'Lojinha Lofi',
+        mode: d.mode || 'normal',
+        day: d.day || 1,
+        money: d.money ?? START_MONEY,
+        rep: d.rep ?? 3,
+        region: d.region || 'residencial',
+        level: d.level || 0,
+        updatedAt: Date.now(),
+      }]
+      writeSavesIndex(list)
+    } catch (e) { /* ignore */ }
+  } else {
+    savesList.splice(0, savesList.length, ...list)
+  }
+  return savesList
+}
+
 let rev = 0
 export const saveMeta = { locked: false } // travado quando o jogo foi aberto em outra aba ou aparelho
 export function localRev() {
@@ -523,7 +741,7 @@ export function replaceLocalSave(data, r) {
 }
 let restarting = false // ao recomeçar, o salvamento automático não pode regravar o jogo antigo
 export function save() {
-  if (restarting || saveMeta.locked) return
+  if (restarting || saveMeta.locked || window.__visiting || (ui.modal === 'start' && !getActiveSaveId())) return
   try {
     hooks.beforeSave()
     const d = JSON.parse(JSON.stringify(game))
@@ -536,17 +754,58 @@ export function save() {
     const json = JSON.stringify({ ...d, cart: ui.cart, log: ui.log, _rev: rev })
     localStorage.setItem(KEY, json)
     localStorage.setItem(REV_KEY, String(rev))
+    let sid = getActiveSaveId()
+    if (!sid) { sid = 'save_' + uid(); setActiveSaveId(sid) }
+    localStorage.setItem(slotKey(sid), json)
+    const list = readSavesIndex()
+    const meta = {
+      id: sid,
+      playerName: game.playerName || settings.playerName || 'Lojista',
+      shopName: game.shopName || game.branchName || settings.storeName || 'Lojinha Lofi',
+      mode: game.mode || 'normal',
+      day: game.day || 1,
+      money: game.money ?? 0,
+      rep: game.rep ?? 3,
+      region: game.region || 'residencial',
+      level: game.level || 0,
+      updatedAt: Date.now(),
+    }
+    const idx = list.findIndex((x) => x.id === sid)
+    if (idx >= 0) list[idx] = meta; else list.unshift(meta)
+    writeSavesIndex(list)
     hooks.afterSave(json, rev, game.day)
   } catch (e) { /* ignore */ }
 }
 export function load() {
   try {
     rev = localRev()
-    const raw = localStorage.getItem(KEY)
+    refreshSavesList()
+    const sid = getActiveSaveId()
+    const slotRaw = sid ? localStorage.getItem(slotKey(sid)) : null
+    const keyRaw = localStorage.getItem(KEY)
+    let raw = keyRaw
+    if (slotRaw && keyRaw) {
+      try {
+        const sr = JSON.parse(slotRaw)?._rev || 0
+        const kr = JSON.parse(keyRaw)?._rev || 0
+        if (sr >= kr) raw = slotRaw
+      } catch (e) { raw = slotRaw }
+    } else if (slotRaw) {
+      raw = slotRaw
+    }
     if (!raw) return false
     const { cart, log, _rev, ...d } = JSON.parse(raw)
     // saves de versões anteriores não têm os campos novos: entram os valores padrão
-    Object.assign(game, { market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {}, plan: basePlan(d.level || 0), career: newCareer(), recipes: {}, orders: [], zapOn: true, team: [], candidates: [], pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null }, d, { speed: 1, paused: false })
+    Object.assign(game, { market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {}, plan: basePlan(d.level || 0), career: newCareer(), recipes: {}, orders: [], zapOn: true, team: [], candidates: [], pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null, mode: 'normal', pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: 'Matriz', branches: [], lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0 }, d, { speed: 1, paused: false })
+    game.playerName = d.playerName || settings.playerName || 'Lojista'
+    game.shopName = d.shopName || (d.branchId === 'main' ? d.branchName : null) || settings.storeName || 'Lojinha Lofi'
+    if (game.branchId === 'main' && (!d.branchName || d.branchName === 'Matriz')) game.branchName = game.shopName
+    settings.playerName = game.playerName
+    settings.storeName = game.shopName
+    game.pomodoro = { ...newPomodoro(), ...(game.pomodoro || {}) }
+    game.lifetime = { ...newLifetime(), ...(game.lifetime || {}) }
+    game.bigGoals = { claimed: { ...(game.bigGoals?.claimed || {}) } }
+    game.branches = Array.isArray(game.branches) ? game.branches : []
     delete game.staff
     if (game.forecast && game.forecast.created == null) game.forecast = null // boato do sistema antigo
     if (!d.team && d.staff) { // saves antigos guardavam só quantos havia de cada cargo
@@ -565,7 +824,7 @@ export function load() {
     discoverRecipes(false)
     // pedidos do Zap em andamento dependiam do repositor e do motoboy na tela: ficam só os concluídos
     game.orders = (game.orders || []).filter((o) => o.state === 'done' || o.state === 'refused')
-    game.boxes.forEach((b) => { b.res = null; b.id = uid() })
+    game.boxes.forEach((b) => { b.res = null; b.id = uid(); if (b.product && b.daysLeft == null) b.daysLeft = shelfLifeOf(b.product) })
     game.shelves = game.shelves.filter((s) => !(s.style === 'wall' && s.slot >= 2))
     // versões de teste converteram a prateleira da ponta em outro tipo: volta ao tipo e ao giro que ela tinha
     for (const s of game.shelves) {
@@ -584,6 +843,7 @@ export function load() {
       s.brokenT = s.brokenT || 0
       s.call = s.call || null
       s.techAt = null
+      s.daysLeft = s.product && s.count > 0 ? (s.daysLeft ?? shelfLifeOf(s.product)) : null
     })
     game.register = d.register || defaultRegister(game.plan)
     game.decor = (d.decor || defaultDecor(game.plan)).map((o) => ({ ...o, id: uid() }))
@@ -615,12 +875,87 @@ export function load() {
 export function wipeSave() {
   try { localStorage.removeItem(KEY) } catch (e) { /* ignore */ }
 }
-// personagem, pet e música ficam nas preferências e não são apagados
+
+export function createNewSave({ playerName, shopName, mode }) {
+  if (window.__visiting) return toast('Volte para sua loja antes de criar uma nova partida', 'bad')
+  if (getActiveSaveId()) save()
+  const sid = 'save_' + uid()
+  setActiveSaveId(sid)
+  newGame({ playerName, shopName, mode })
+  hooks.resetEntities?.()
+  hooks.refreshGrid?.()
+  hooks.rebuildShop?.()
+  hooks.setPlayerPos?.(4, (game.plan?.rows || 6) + 1, 0)
+  hooks.syncStoreName?.(game.shopName)
+  save()
+  ui.modal = null
+  toast(`🎉 Bem-vindo(a), ${game.playerName}! ${game.shopName} inaugurada no modo ${GAME_MODES[game.mode]?.name || game.mode}!`, 'good')
+}
+
+export function loadSaveSlot(sid) {
+  if (window.__visiting) return toast('Volte para sua loja antes de trocar de partida', 'bad')
+  const raw = localStorage.getItem(slotKey(sid))
+  if (!raw) return false
+  if (getActiveSaveId()) save()
+  setActiveSaveId(sid)
+  localStorage.setItem(KEY, raw)
+  const ok = load()
+  if (ok) {
+    hooks.resetEntities?.()
+    hooks.refreshGrid?.()
+    hooks.rebuildShop?.()
+    const saved = game.playerPos
+    hooks.setPlayerPos?.(saved ? saved.x : 4, saved ? saved.z : (game.plan?.rows || 6) + 1, saved?.face || 0)
+    hooks.syncStoreName?.(game.shopName)
+    ui.modal = null
+    toast(`📂 Partida carregada: ${game.shopName} (Dia ${game.day})`, 'good')
+  }
+  return ok
+}
+
+export function restartSaveSlot(sid = getActiveSaveId()) {
+  if (window.__visiting) return toast('Volte para sua loja antes de recomeçar a partida', 'bad')
+  const list = readSavesIndex()
+  const meta = list.find((x) => x.id === sid)
+  const pName = meta?.playerName || game.playerName || settings.playerName || 'Lojista'
+  const sName = meta?.shopName || game.shopName || settings.storeName || 'Lojinha Lofi'
+  const mode = meta?.mode || game.mode || 'normal'
+  if (!confirm(`Recomeçar "${sName}" do Dia 1? O modo (${GAME_MODES[mode]?.name || mode}) e os nomes serão mantidos.`)) return false
+  setActiveSaveId(sid || 'save_' + uid())
+  newGame({ playerName: pName, shopName: sName, mode })
+  hooks.resetEntities?.()
+  hooks.refreshGrid?.()
+  hooks.rebuildShop?.()
+  hooks.setPlayerPos?.(4, (game.plan?.rows || 6) + 1, 0)
+  hooks.syncStoreName?.(game.shopName)
+  save()
+  ui.modal = null
+  toast(`🔄 Partida "${sName}" reiniciada do Dia 1!`, 'info')
+  return true
+}
+
+export function deleteSaveSlot(sid) {
+  const list = readSavesIndex()
+  const target = list.find((x) => x.id === sid)
+  if (!target) return
+  if (!confirm(`Apagar permanentemente o save "${target.shopName}" (Dia ${target.day})?`)) return
+  const nextList = list.filter((x) => x.id !== sid)
+  try { localStorage.removeItem(slotKey(sid)) } catch (e) { /* ignore */ }
+  writeSavesIndex(nextList)
+  if (getActiveSaveId() === sid) {
+    if (nextList.length > 0) {
+      loadSaveSlot(nextList[0].id)
+      ui.modal = 'start'
+    } else {
+      setActiveSaveId('')
+      wipeSave()
+      ui.modal = 'start'
+    }
+  }
+}
+
 export function restartGame() {
-  if (!confirm('Recomeçar do zero? Todo o progresso salvo será apagado.')) return
-  restarting = true
-  wipeSave()
-  location.reload()
+  restartSaveSlot(getActiveSaveId())
 }
 
 export const stockInfo = (pid) => ({

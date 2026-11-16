@@ -1,10 +1,10 @@
 <script setup>
 import { computed } from 'vue'
 import { PhLockKey, PhMinus, PhMoonStars, PhNewspaper, PhPlus, PhShoppingCart, PhSnowflake, PhTruck, PhHandshake, PhTrendUp, PhTrendDown, PhPackage } from '@phosphor-icons/vue'
-import { game, ui, money, boxCost, cartAdd, cartTotal, placeOrder, passLevelOf, passClaimable, claimPass, stockInfo, costOf, costChange, isExpress, orderFee, stockCount, stockCap, stockFree, dockCount, pendingBoxes, cartBoxes, contractTier, nextContract, boxSizes, boxDiscount, cartKey, forecastChange, rumorDays } from '../game/state.js'
+import { game, ui, money, boxCost, cartAdd, cartTotal, placeOrder, passLevelOf, passClaimable, claimPass, stockInfo, costOf, costChange, isExpress, orderFee, stockCount, stockCap, stockFree, dockCount, pendingBoxes, cartBoxes, contractTier, nextContract, boxSizes, boxDiscount, cartKey, forecastChange, rumorDays, modeMods } from '../game/state.js'
 import { world } from '../game/world.js'
 import { productThumb } from '../game/assets.js'
-import { PRODUCTS, PACK, CONTRACTS, RUMOR } from '../game/config.js'
+import { PRODUCTS, PACK, CONTRACTS, RUMOR, shelfLifeOf } from '../game/config.js'
 
 const open = computed(() => PRODUCTS.filter((p) => game.unlocked[p.id]))
 // fornecedores novos vêm do passe, na ordem dos níveis
@@ -52,6 +52,7 @@ const sleep = () => { if (placeOrder()) world.startNextDay() }
           </div>
           <span class="muted">
             custo unitário {{ money(costOf(p.id)) }}
+            <span v-if="modeMods().expiration"> · validade {{ shelfLifeOf(p.id) }}d</span>
             <b v-if="costChange(p.id)" :class="costChange(p.id) > 0 ? 'bad-t' : 'good-t'">
               {{ costChange(p.id) > 0 ? '+' : '' }}{{ costChange(p.id) }}%
             </b>

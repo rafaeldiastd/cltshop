@@ -7,7 +7,7 @@ import { hooks, saveMeta, localRev, replaceLocalSave, save, game, toast } from '
 
 const URL_ = import.meta.env.VITE_SUPABASE_URL
 const KEY_ = import.meta.env.VITE_SUPABASE_ANON_KEY
-const sb = URL_ && KEY_ ? createClient(URL_, KEY_) : null
+export const sb = URL_ && KEY_ ? createClient(URL_, KEY_) : null
 
 const SESSION = crypto.randomUUID()
 const TAB_KEY = 'lojinha-lofi-tab' // a aba que abre por último avisa as outras por aqui
@@ -66,9 +66,9 @@ function fail() {
 
 // Chamado antes do load(): espera a nuvem por até 4 s. Sem resposta, o jogo abre com o save local
 // e a conexão continua tentando por trás.
+const isVisitTab = () => !!window.__visiting || new URLSearchParams(location.search).has('visit')
 export function startCloud() {
-  addEventListener('storage', (e) => { if (e.key === TAB_KEY && e.newValue !== SESSION) lock('other') })
-  try { localStorage.setItem(TAB_KEY, SESSION) } catch (e) { /* ignore */ }
+  if (isVisitTab()) return Promise.resolve()
   if (!sb) return Promise.resolve()
   const p = connect().then(onClaim).catch(fail)
   return Promise.race([p, new Promise((r) => setTimeout(r, 4000))])

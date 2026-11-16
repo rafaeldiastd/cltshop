@@ -1,5 +1,5 @@
 // Modo construção: cada quadrado é 1 m². As paredes só andam para fora e o tipo de comércio limita até onde.
-import { game, ui, hooks, toast, canExpand, customersPerDay } from './state.js'
+import { game, ui, hooks, toast, canExpand, customersPerDay, regionMods } from './state.js'
 import { BUILD, LEVELS } from './config.js'
 import { checkLayout, settleLayout, stockRoom, planArea } from './layout.js'
 import { stopEdit } from './editor.js'
@@ -69,11 +69,12 @@ export function quote() {
   const before = furniture(L).map((o) => o.x + ',' + o.z)
   const why = arrange(plan, L)
   const moved = furniture(L).filter((o, i) => o.x + ',' + o.z !== before[i]).length
+  const mult = regionMods().buildCost || 1
   return {
     plan, why, moved, area0, area1, m2: area1 - area0, stockM2,
     changed: area1 > area0 || stockM2 > 0,
-    rate: buildRate(area0),
-    total: cents(floorCost(area0, area1) + stockM2 * buildRate(area1) * BUILD.stockFactor),
+    rate: cents(buildRate(area0) * mult),
+    total: cents((floorCost(area0, area1) + stockM2 * buildRate(area1) * BUILD.stockFactor) * mult),
     cap0: stockRoom(from).cap, cap1: stockRoom(plan).cap,
     customers0: Math.round(customersPerDay(from)), customers1: Math.round(customersPerDay(plan)),
   }

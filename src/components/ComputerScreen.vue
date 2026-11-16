@@ -1,5 +1,5 @@
 <script setup>
-import { PhPaintBrush, PhPower, PhShoppingCart, PhStorefront, PhGraduationCap, PhWhatsappLogo, PhBookOpen, PhTicket, PhUsersThree, PhTag } from '@phosphor-icons/vue'
+import { PhPaintBrush, PhPower, PhShoppingCart, PhStorefront, PhGraduationCap, PhWhatsappLogo, PhBookOpen, PhTicket, PhUsersThree, PhTag, PhBuildings } from '@phosphor-icons/vue'
 import ProductsApp from './ProductsApp.vue'
 import StoreApp from './StoreApp.vue'
 import DecorApp from './DecorApp.vue'
@@ -9,6 +9,7 @@ import RecipesApp from './RecipesApp.vue'
 import PassApp from './PassApp.vue'
 import PricesApp from './PricesApp.vue'
 import TeamApp from './TeamApp.vue'
+import BranchesApp from './BranchesApp.vue'
 import { computed } from 'vue'
 import { game, ui, money, clockText, passPending } from '../game/state.js'
 import { pendingRequests } from '../game/team.js'
@@ -19,6 +20,7 @@ const APPS = [
   { id: 'products', label: 'Compras', icon: PhShoppingCart },
   { id: 'prices', label: 'Preços', icon: PhTag },
   { id: 'store', label: 'Loja', icon: PhStorefront },
+  { id: 'branches', label: 'Filiais', icon: PhBuildings },
   { id: 'team', label: 'Equipe', icon: PhUsersThree },
   { id: 'pass', label: 'Passe', icon: PhTicket },
   { id: 'career', label: 'Carreira', icon: PhGraduationCap },
@@ -52,6 +54,7 @@ const badge = (id) => (id === 'pass' ? passPending() : id === 'team' ? pendingRe
             <ProductsApp v-if="ui.computerApp === 'products'" />
             <PricesApp v-else-if="ui.computerApp === 'prices'" />
             <StoreApp v-else-if="ui.computerApp === 'store'" />
+            <BranchesApp v-else-if="ui.computerApp === 'branches'" />
             <TeamApp v-else-if="ui.computerApp === 'team'" />
             <PassApp v-else-if="ui.computerApp === 'pass'" />
             <CareerApp v-else-if="ui.computerApp === 'career'" />

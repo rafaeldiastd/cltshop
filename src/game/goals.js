@@ -1,6 +1,7 @@
 // Metas do dia: três objetivos pequenos, contados com as estatísticas de game.today, que rendem experiência.
-import { game, toast, money, gainXp, xpNext, customersPerDay, hasPerk } from './state.js'
+import { game, toast, money, gainXp, xpNext, customersPerDay, hasPerk, modeMods } from './state.js'
 import { PID, GOALS } from './config.js'
+import { planArea } from './layout.js'
 import { onDuty } from './team.js'
 
 const sum = (o) => Object.values(o || {}).reduce((s, n) => s + n, 0)
@@ -35,7 +36,7 @@ const KINDS = {
   cafe: { diff: 'mid', when: () => game.cafe && onDuty('barista') > 0, make: () => ({ target: rint(6, 10) }), cur: (t) => t.cafeSales, text: (g) => `Servir ${g.target} pedidos na cafeteria` },
   delivery: { diff: 'mid', when: () => game.zapOn && onDuty('courier') > 0, make: () => ({ target: rint(2, 3) }), cur: (t) => t.deliveries || 0, text: (g) => `Entregar ${g.target} pedidos do Zap` },
   impulse: { diff: 'mid', when: () => game.shelves.some((s) => s.boost > 0 && s.count > 0), make: () => ({ target: rint(3, 5) }), cur: (t) => t.impulse || 0, text: (g) => `${g.target} compras por impulso` },
-  noTheft: { diff: 'easy', final: true, when: () => game.day >= 2, make: () => ({}), bad: (t) => t.stolenUnits, text: () => 'Não deixar nenhum ladrão escapar' },
+  noTheft: { diff: 'easy', final: true, when: () => game.day >= 2 && modeMods().thieves, make: () => ({}), bad: (t) => t.stolenUnits, text: () => 'Não deixar nenhum ladrão escapar' },
   arcade: { diff: 'easy', when: () => hasPerk('arcade'), make: () => ({ target: rint(4, 8) }), cur: (t) => t.arcadeRevenue || 0, text: (g) => `Ganhar ${money(g.target)} nos fliperamas`, money: true },
   produce: {
     diff: 'mid',
@@ -113,3 +114,50 @@ export function checkGoals(endOfDay = false) {
   }
 }
 export const goalsDone = () => game.goals.filter((g) => g.done).length
+
+// ---------- metas grandes (marcos permanentes de carreira) ----------
+export const BIG_GOALS = [
+  { id: 'money_1', cat: 'Dinheiro', text: 'Acumular R$ 1.500 em caixa', target: 1500, money: true, cur: () => Math.max(0, Math.floor(game.money)), reward: { money: 250, xp: 20 } },
+  { id: 'money_2', cat: 'Dinheiro', text: 'Acumular R$ 5.000 em caixa', target: 5000, money: true, cur: () => Math.max(0, Math.floor(game.money)), reward: { money: 600, xp: 45 } },
+  { id: 'money_3', cat: 'Dinheiro', text: 'Magnata: Acumular R$ 15.000 em caixa', target: 15000, money: true, cur: () => Math.max(0, Math.floor(game.money)), reward: { money: 1500, xp: 100, points: 1 } },
+  { id: 'custom_1', cat: 'Loja', text: 'Personalizar a loja: 6 móveis/decorações e tapete', target: 7, cur: () => Math.min(6, game.shelves.length + game.decor.length) + (game.doormat ? 1 : 0), reward: { money: 150, xp: 20 } },
+  { id: 'custom_2', cat: 'Loja', text: 'Expandir loja para 100 m² e 12 móveis/decorações', target: 100, cur: () => (game.shelves.length + game.decor.length >= 12 ? Math.min(100, planArea(game.plan)) : Math.min(99, planArea(game.plan))), reward: { money: 400, xp: 45 } },
+  { id: 'custom_3', cat: 'Loja', text: 'Loja Completa: Mercadinho, Cafeteria e 18 móveis/decorações', target: 18, cur: () => (game.level >= 2 && game.cafe ? Math.min(18, game.shelves.length + game.decor.length) : Math.min(17, game.shelves.length + game.decor.length)), reward: { money: 1000, xp: 90, points: 1 } },
+  { id: 'serve_1', cat: 'Clientes', text: 'Atender 50 clientes no total', target: 50, cur: () => game.lifetime?.served || 0, reward: { money: 150, xp: 20 } },
+  { id: 'serve_2', cat: 'Clientes', text: 'Atender 250 clientes no total', target: 250, cur: () => game.lifetime?.served || 0, reward: { money: 450, xp: 50 } },
+  { id: 'serve_3', cat: 'Clientes', text: 'Freguesia Fiel: Atender 1.000 clientes', target: 1000, cur: () => game.lifetime?.served || 0, reward: { money: 1200, xp: 120, points: 1 } },
+  { id: 'branch_1', cat: 'Expansão', text: 'Abrir a primeira filial em outra região', target: 1, cur: () => game.branches?.length || 0, reward: { money: 500, xp: 60 } },
+  { id: 'branch_2', cat: 'Expansão', text: 'Rede Regional: Ter filiais em 3 regiões', target: 3, cur: () => game.branches?.length || 0, reward: { money: 1500, xp: 120, points: 1 } },
+]
+
+const notifiedBig = new Set()
+export function bigGoalsList() {
+  const claimed = game.bigGoals?.claimed || {}
+  return BIG_GOALS.map((g) => {
+    const cur = Math.min(g.target, g.cur())
+    const isClaimed = !!claimed[g.id]
+    const ready = !isClaimed && cur >= g.target
+    return { ...g, cur, claimed: isClaimed, ready }
+  })
+}
+export const bigGoalsPending = () => bigGoalsList().filter((g) => g.ready).length
+export function claimBigGoal(id) {
+  const g = bigGoalsList().find((x) => x.id === id)
+  if (!g || !g.ready) return
+  if (!game.bigGoals) game.bigGoals = { claimed: {} }
+  game.bigGoals.claimed[id] = true
+  const got = []
+  if (g.reward.money) { game.money += g.reward.money; got.push(money(g.reward.money)) }
+  if (g.reward.xp) { gainXp(g.reward.xp); got.push(`+${g.reward.xp} XP`) }
+  if (g.reward.points) { game.career.points += g.reward.points; got.push(`+${g.reward.points} ponto de maestria`) }
+  toast(`🏆 Meta grande resgatada: ${g.text} (${got.join(', ')})`, 'good')
+}
+export function checkBigGoals() {
+  if (window.__visiting) return
+  for (const g of bigGoalsList()) {
+    if (g.ready && !notifiedBig.has(g.id)) {
+      notifiedBig.add(g.id)
+      toast(`🏆 Meta grande alcançada: ${g.text}! Resgate em Metas`, 'good')
+    }
+  }
+}

@@ -94,4 +94,5 @@ export function sfx(name) {
   if (name === 'coin') { tone(988, t, 0.18, { type: 'square', vol: 0.03, lp: 3000, dest: master }); tone(1319, t + 0.07, 0.3, { type: 'square', vol: 0.03, lp: 3000, dest: master }) }
   else if (name === 'pop') tone(520, t, 0.1, { type: 'sine', vol: 0.06, attack: 0.005, lp: 2500, dest: master })
   else if (name === 'chime') [523, 659, 784].forEach((f, i) => tone(f, t + i * 0.12, 0.8, { vol: 0.05, lp: 3000, dest: master }))
+  else if (name === 'alarm') [0, 0.18, 0.36, 0.54].forEach((dt, i) => tone(i % 2 === 0 ? 880 : 660, t + dt, 0.15, { type: 'sawtooth', vol: 0.04, attack: 0.005, lp: 2400, dest: master }))
 }

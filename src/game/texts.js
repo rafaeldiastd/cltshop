@@ -1,4 +1,4 @@
-import { game, ui } from './state.js'
+import { game, ui, pranksLeft } from './state.js'
 import { PID, DECOR } from './config.js'
 
 const shelfOf = (id) => game.shelves.find((s) => s.id === id)
@@ -7,6 +7,16 @@ const shelfLabel = (s) => s.kind === 'meat' ? 'freezer de carnes' : s.kind === '
 
 export function hoverText(hit) {
   if (!hit || ui.modal) return null
+  if (window.__visiting) {
+    if (hit.kind === 'dirt') return 'Limpar sujeira (ajudar anfitrião)'
+    if (hit.kind === 'pet') return 'Fazer carinho no pet'
+    if (hit.kind === 'shelf') {
+      const s = shelfOf(hit.id)
+      const label = ui.prankMode === 'unstock' ? 'Esvaziar prateleira' : 'Trocar preço da prateleira'
+      return s?.product ? `${label} (${pranksLeft()}/3 hoje)` : null
+    }
+    return null
+  }
   if (ui.editing) {
     if (ui.held) return ui.held.why || null
     if (hit.kind === 'shelf') {

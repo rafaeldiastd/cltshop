@@ -54,7 +54,11 @@ watch(() => JSON.stringify(av), () => preview?.show(av))
 onBeforeUnmount(() => preview?.dispose())
 
 const KEYS = [
-  { keys: ['W', 'A', 'S', 'D'], alt: 'ou setas', what: 'Andar' },
+  { keys: ['W', 'A', 'S', 'D'], what: 'Andar com o personagem' },
+  { keys: ['↑', '↓', '←', '→'], what: 'Mover a câmera (estilo The Sims)' },
+  { keys: ['<', '>'], what: 'Rotacionar a tela em 45°' },
+  { keys: ['−', '+'], what: 'Afastar e aproximar zoom' },
+  { keys: ['Espaço'], what: 'Pausar / continuar o jogo' },
   { keys: ['E'], what: 'Interagir com o que está por perto' },
   { keys: ['Q'], what: 'Soltar a caixa aos seus pés' },
   { keys: ['R'], what: 'Girar o móvel (no modo layout)' },
@@ -133,7 +137,8 @@ const KEYS = [
     </div>
 
     <template #foot>
-      <button class="btn restart" @click="restartGame"><PhArrowCounterClockwise weight="bold" /> Recomeçar o jogo</button>
+      <button class="btn restart" @click="ui.modal = 'start'">📂 Partidas / Saves</button>
+      <button class="btn" @click="restartGame"><PhArrowCounterClockwise weight="bold" /> Recomeçar o jogo</button>
       <button class="btn primary" @click="close">Fechar</button>
     </template>
   </Modal>

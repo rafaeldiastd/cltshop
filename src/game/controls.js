@@ -14,6 +14,13 @@ export function onClick(hit) {
     else if (hit.kind === 'shelf' || hit.kind === 'counter' || hit.kind === 'decor' || hit.kind === 'cafe') pickUp(hit.kind, hit.id)
     return
   }
+  if (window.__visiting) {
+    if (hit.kind === 'floor') world.cmdMove(hit.x, hit.z)
+    else if (hit.kind === 'dirt') world.cmdClean(game.dirt.find((d) => d.id === hit.id))
+    else if (hit.kind === 'pet') world.cmdVisitPet()
+    else if (hit.kind === 'shelf') world.cmdPrankShelf(shelfOf(hit.id))
+    return
+  }
   if (hit.kind === 'box') { const b = boxOf(hit.id); b && world.cmdBox(b) }
   else if (hit.kind === 'shelf') { const s = shelfOf(hit.id); s && world.cmdShelf(s) }
   else if (hit.kind === 'counter') { if (game.phase === 'open' || game.phase === 'closing') world.cmdServe(); else startEdit() }

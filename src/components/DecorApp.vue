@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { PhCoffee, PhPaintBrush, PhPottedPlant, PhSecurityCamera, PhLamp, PhLightbulb, PhCheck, PhClock, PhFrameCorners } from '@phosphor-icons/vue'
+import { PhCoffee, PhPaintBrush, PhPottedPlant, PhSecurityCamera, PhLamp, PhLightbulb, PhCheck, PhClock, PhFrameCorners, PhSiren } from '@phosphor-icons/vue'
 import { game, money, isClosed, decorCount, sellDecor, hasPerk, buyDoormat, setDoormat, cleanMatText } from '../game/state.js'
 import { buyDecor, canBuyDecor, decorMaxed } from '../game/editor.js'
 import { decorThumb } from '../game/assets.js'
@@ -8,7 +8,7 @@ import { DECOR, DOORMAT } from '../game/config.js'
 
 const items = Object.entries(DECOR).filter(([, d]) => d.price && (!d.perk || hasPerk(d.perk)))
 const resale = (d) => Math.floor(d.price / 2)
-const ICON = { camera: PhSecurityCamera, cafeTable: PhCoffee, lamp: PhLamp, led: PhLightbulb, clock: PhClock, frame: PhFrameCorners } // itens sem modelo GLB pronto
+const ICON = { camera: PhSecurityCamera, alarm: PhSiren, cafeTable: PhCoffee, lamp: PhLamp, led: PhLightbulb, clock: PhClock, frame: PhFrameCorners } // itens sem modelo GLB pronto
 
 // tapete de entrada: texto e cor escolhidos aqui, aparece na porta da loja
 const matText = ref(game.doormat?.text || 'Bem-vindo!')

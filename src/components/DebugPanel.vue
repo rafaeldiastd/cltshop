@@ -1,9 +1,9 @@
 <script setup>
-import { game, ui, uid, money, upgradeType, rollMarket, refOf, gainXp, xpNext } from '../game/state.js'
+import { game, ui, uid, money, upgradeType, rollMarket, refOf, gainXp, xpNext, daySeconds } from '../game/state.js'
 import { makeRequest, postJobAd } from '../game/team.js'
 import { makeGoals } from '../game/goals.js'
 import { world } from '../game/world.js'
-import { PRODUCTS, PACK, SHELF_CAP, DAY_SECONDS, LEVELS, LUNCH } from '../game/config.js'
+import { PRODUCTS, PACK, SHELF_CAP, LEVELS, LUNCH } from '../game/config.js'
 
 const addMoney = (n) => { game.money += n }
 const addRep = (d) => { game.rep = Math.max(1, Math.min(5, game.rep + d)) }
@@ -30,11 +30,11 @@ function levelUp() {
 }
 
 const isOpen = () => game.phase === 'open'
-const goTo = (hour) => { if (isOpen()) game.clock = ((hour - 9) / 12) * DAY_SECONDS }
+const goTo = (hour) => { if (isOpen()) game.clock = ((hour - 9) / 12) * daySeconds() }
 function openShop() { ui.modal = null; world.openShop() }
-function endDay() { if (isOpen()) game.clock = DAY_SECONDS; ui.modal = null }
+function endDay() { if (isOpen()) game.clock = daySeconds(); ui.modal = null }
 function nextDay() { if (game.phase === 'night') world.startNextDay() }
-const lunchAt = (LUNCH.start / DAY_SECONDS) * 12 + 9
+const lunchAt = (LUNCH.start / 900) * 12 + 9
 
 const spawnCustomers = () => { for (let i = 0; i < 5; i++) world.spawnCustomer() }
 const levelUpXp = () => gainXp(xpNext() - game.career.xp)
@@ -51,6 +51,7 @@ function requests() {
   for (const m of game.team) if (!m.request) m.request = makeRequest(m) || { type: 'dayoff', day: game.day }
 }
 function thief() { ui.modal = null; world.spawnThief() }
+function robber() { ui.modal = null; world.spawnRobber() }
 </script>
 
 <template>
@@ -111,6 +112,7 @@ function thief() { ui.modal = null; world.spawnThief() }
       <div class="row">
         <button class="btn sm" :disabled="!isOpen()" @click="spawnCustomers">5 clientes</button>
         <button class="btn sm" :disabled="!isOpen()" @click="thief">Ladrão agora</button>
+        <button class="btn sm" :disabled="!isOpen()" @click="robber">Assalto agora</button>
         <button class="btn sm" @click="rollMarket">Sortear notícia e clima</button>
         <button class="btn sm" :class="{ primary: game.weather === 'hot' }" @click="game.weather = 'hot'">Calor</button>
         <button class="btn sm" :class="{ primary: game.weather === 'mild' }" @click="game.weather = 'mild'">Ameno</button>

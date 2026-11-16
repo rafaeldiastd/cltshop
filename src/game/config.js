@@ -148,6 +148,8 @@ export const MOODS = {
   impulse:   { emoji: '🤩', text: 'Viu um produto em destaque e levou por impulso' },
   arcade:    { emoji: '🕹️', text: 'Jogou uma ficha no fliperama' },
   dirty:     { emoji: '🤢', text: 'Achou a loja suja' },
+  expired:   { emoji: '🗑️', text: 'Encontrou produto vencido' },
+  robber:    { emoji: '🔫', text: 'Assaltante no caixa!' },
 }
 
 export const PETS = {
@@ -194,6 +196,7 @@ export const DECOR = {
   mannequin: { name: 'manequim', price: 90 },
   gacha:     { name: 'máquina de brindes', price: 120 },
   camera:    { name: 'câmera de segurança', price: 400, max: 1, desc: 'Impede 70% dos roubos sozinha' },
+  alarm:     { name: 'alarme policial', price: 550, max: 1, wall: true, desc: 'Dispara sirene e impede 80% dos assaltos ao caixa' },
   cafeTable: { name: 'mesinha de café', price: 50 },
   ticket:    { name: 'máquina de tíquetes', price: 110 },
   prizeWheel: { name: 'roda de prêmios', price: 130 },
@@ -333,8 +336,75 @@ export const TECH = { serviceBase: 20, servicePerWear: 0.4, repair: 110, service
 
 // ---------- sujeira: clientes sujam a loja; sujeira afasta clientes e piora a primeira impressão ----------
 // chances por cliente: enter = pegadas na entrada, spill = algo derramado na prateleira, crumbs = farelo na cafeteria
-export const DIRT = { enter: 0.2, spill: 0.05, crumbs: 0.25, max: 40, full: 18, spawn: 0.35, feel: 0.25, rep: 0.01, clean: 1.2 }
+export const DIRT = { enter: 0.06, spill: 0.015, crumbs: 0.08, max: 30, full: 22, spawn: 0.25, feel: 0.3, rep: 0.008, clean: 1.0 }
 export const DOORMAT = { price: 80, dirt: 0.35, maxText: 20, colors: ['#ef8a77', '#6fb3a8', '#f2c25b', '#5b4a6e', '#7fa6c9', '#8a6a4a'] }
+
+// ---------- validade dos produtos (em dias) ----------
+export const SHELF_LIFE_SECTION = { produce: 3, bakery: 3, meat: 4, drink: 6, grocery: 10 }
+export const SHELF_LIFE_OVERRIDE = { cookie: 6, milk: 4, egg: 5, cheese: 5, water: 12, soda: 10, wine: 15, energy: 10 }
+export const shelfLifeOf = (pid) => SHELF_LIFE_OVERRIDE[pid] || SHELF_LIFE_SECTION[PID[pid]?.section] || 7
+
+// ---------- modos de jogo (Lo-Fi + Pomodoro, Normal, Hardcore) ----------
+export const GAME_MODES = {
+  lofi: {
+    id: 'lofi', name: 'Modo Lo-Fi', emoji: '🎧',
+    desc: 'Relaxante para estudar/trabalhar: timer Pomodoro configurável, piloto automático do personagem, reposição automática e sem assaltos ou validade.',
+    dirt: 0.4, freezerWear: 0.4, patience: 1.4, willing: 1.1, wageMult: 0.85, xpMult: 1.0, thieves: false, robberies: false, expiration: false,
+  },
+  normal: {
+    id: 'normal', name: 'Modo Normal', emoji: '🏪',
+    desc: 'Equilíbrio clássico de gestão: validade de produtos, eventos de mercado, furtos e assaltos ocasionais.',
+    dirt: 1.0, freezerWear: 1.0, patience: 1.0, willing: 1.0, wageMult: 1.0, xpMult: 1.0, thieves: true, robberies: true, expiration: true,
+  },
+  hardcore: {
+    id: 'hardcore', name: 'Modo Hardcore', emoji: '🔥',
+    desc: 'Desafio máximo: clientes exigentes, assaltos frequentes, multa sanitária por produtos vencidos, custos +25% e +50% XP.',
+    dirt: 1.4, freezerWear: 1.35, patience: 0.75, willing: 0.92, wageMult: 1.25, xpMult: 1.5, thieves: true, robberies: true, expiration: true,
+  },
+}
+export const POMODORO_PRESETS = [
+  { label: '15m / 3m', focus: 15, break: 3 },
+  { label: '25m / 5m (Pomodoro)', focus: 25, break: 5 },
+  { label: '45m / 10m', focus: 45, break: 10 },
+  { label: '60m / 10m', focus: 60, break: 10 },
+]
+
+// ---------- assaltos esporádicos ao caixa ----------
+export const ROBBERY = { minDay: 5, baseChance: 0.08, hardcoreChance: 0.16, seconds: 2.5, stealMin: 60, stealMax: 180 }
+
+// ---------- regiões de construção (buffs e debuffs) e filiais ----------
+export const REGIONS = {
+  residencial: {
+    id: 'residencial', name: 'Bairro Residencial', emoji: '🏡', cost: 1400,
+    buffs: ['+25% paciência na fila', '-30% assaltos e furtos', '+20% procura em Padaria e Hortifruti'],
+    debuffs: ['-8% tolerância a preços caros'],
+    mods: { customers: 1.0, patience: 1.25, crime: 0.7, willing: 0.92, buildCost: 1.0, wageMult: 1.0, freezerWear: 1.0, dirt: 0.9, delivery: 1.0, sections: { bakery: 1.2, produce: 1.2 } },
+  },
+  centro: {
+    id: 'centro', name: 'Centro Comercial', emoji: '🏙️', cost: 1800,
+    buffs: ['+25% fluxo de clientes', '+20% movimento na Cafeteria'],
+    debuffs: ['+25% custo de obras', '+25% chance de assaltos'],
+    mods: { customers: 1.25, patience: 0.95, crime: 1.25, willing: 1.0, buildCost: 1.25, wageMult: 1.05, freezerWear: 1.0, dirt: 1.1, delivery: 1.1, cafe: 1.2, sections: {} },
+  },
+  praia: {
+    id: 'praia', name: 'Orla da Praia', emoji: '🏖️', cost: 2400,
+    buffs: ['+45% procura por Bebidas e Gelados', '+15% fluxo de clientes'],
+    debuffs: ['+25% desgaste de freezers (maresia)', '+20% sujeira de areia'],
+    mods: { customers: 1.15, patience: 1.05, crime: 0.9, willing: 1.08, buildCost: 1.15, wageMult: 1.05, freezerWear: 1.25, dirt: 1.2, delivery: 1.0, coldDemand: 1.45, sections: { drink: 1.35 } },
+  },
+  universitario: {
+    id: 'universitario', name: 'Polo Universitário', emoji: '🎓', cost: 2000,
+    buffs: ['+50% pedidos no Zap Delivery', '+35% renda em fliperamas'],
+    debuffs: ['Orçamento curto (-12% preço máximo aceito)', '+15% sujeira'],
+    mods: { customers: 1.15, patience: 1.0, crime: 1.0, willing: 0.88, buildCost: 0.95, wageMult: 0.95, freezerWear: 1.0, dirt: 1.15, delivery: 1.5, arcade: 1.35, sections: { bakery: 1.15, drink: 1.2 } },
+  },
+  nobre: {
+    id: 'nobre', name: 'Bairro Nobre', emoji: '💎', cost: 3200,
+    buffs: ['Clientes aceitam pagar +25% mais caro', '-45% assaltos', '+30% procura por Carnes e Vinhos'],
+    debuffs: ['+35% salários e obras', '-15% paciência na fila'],
+    mods: { customers: 0.95, patience: 0.85, crime: 0.55, willing: 1.25, buildCost: 1.35, wageMult: 1.35, freezerWear: 1.0, dirt: 0.75, delivery: 1.15, sections: { meat: 1.3, drink: 1.2 } },
+  },
+}
 
 // Regra de compatibilidade entre móvel expositor e produto
 export function canStockProduct(productId, shelf) {

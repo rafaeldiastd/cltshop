@@ -10,11 +10,22 @@ const rows = (o) => Object.entries(o || {}).sort((a, b) => b[1] - a[1])
 const lostUnits = computed(() => rows(s.value.oos))
 const orders = () => { ui.computerApp = 'products'; ui.modal = 'computer' }
 const cleanedText = (n) => (n === 1 ? '1 sujeira limpa' : `${n} sujeiras limpas`)
+const pomoClock = computed(() => {
+  const sec = Math.max(0, Math.ceil(ui.pomoBreakLeft || 0))
+  return String(Math.floor(sec / 60)).padStart(2, '0') + ':' + String(sec % 60).padStart(2, '0')
+})
 </script>
 <template>
   <Modal :title="`Fim do dia ${s.day}`" :icon="PhMoonStars">
+    <div v-if="game.mode === 'lofi' && game.pomodoro?.autoCycle && ui.pomoBreakLeft > 0" class="pomo-banner">
+      ☕ <b>Pausa Pomodoro: {{ pomoClock }}</b> · Próximo dia começa sozinho ao fim da pausa
+    </div>
+    <div v-if="game.mode === 'hardcore' && game.money < -300" class="hc-warn">
+      🔥 <b>Modo Hardcore:</b> Caixa crítico! Recupere o saldo para evitar falência
+    </div>
     <div class="grid">
       <div>Vendas</div><b>{{ money(s.revenue) }}</b>
+      <template v-if="s.branchRevenue"><div class="muted">Lucro das filiais</div><span :class="s.branchRevenue >= 0 ? 'good-t' : 'bad-t'">{{ s.branchRevenue >= 0 ? '+ ' : '− ' }}{{ money(Math.abs(s.branchRevenue)) }}</span></template>
       <template v-if="s.cafeSales"><div class="muted">Da cafeteria ({{ s.cafeSales }} pedidos)</div><span>{{ money(s.cafeRevenue) }}</span></template>
       <template v-if="s.deliveries"><div class="muted">Do Zap Delivery ({{ s.deliveries }} entregas)</div><span>{{ money(s.deliveryRevenue) }}</span></template>
       <template v-if="s.arcadeRevenue"><div class="muted">De fliperama / dança</div><span>{{ money(s.arcadeRevenue) }}</span></template>
@@ -24,6 +35,8 @@ const cleanedText = (n) => (n === 1 ? '1 sujeira limpa' : `${n} sujeiras limpas`
       <template v-if="s.stolen"><div class="muted">Roubos ({{ s.stolenUnits }} itens)</div><span class="bad-t">− {{ money(s.stolen) }}</span></template>
       <template v-if="s.maintenance"><div class="muted">Técnico dos freezers</div><span class="bad-t">− {{ money(s.maintenance) }}</span></template>
       <template v-if="s.spoiled"><div class="muted">Estragou no freezer quebrado ({{ s.spoiled }} itens)</div><span class="bad-t">− {{ money(s.spoiledValue) }}</span></template>
+      <template v-if="s.expired"><div class="muted">Produtos vencidos ({{ s.expired }} itens)</div><span class="bad-t">− {{ money(s.expiredValue) }}</span></template>
+      <template v-if="s.sanitaryFine"><div class="muted">Multa da Vigilância Sanitária</div><span class="bad-t">− {{ money(s.sanitaryFine) }}</span></template>
       <div><b>Lucro do dia</b></div><b :class="s.profit >= 0 ? 'good-t' : 'bad-t'">{{ money(s.profit) }}</b>
       <div class="muted">Caixa agora</div><span>{{ money(game.money) }}</span>
     </div>
@@ -74,4 +87,6 @@ h3 { margin: 14px 0 6px; }
 .goal b { color: #a8740f; }
 h3 { display: flex; align-items: center; gap: 6px; }
 .news { display: flex; gap: 8px; align-items: center; background: var(--mustard); border-radius: 10px; padding: 7px 12px; font-weight: 700; font-size: 14px; }
+.pomo-banner { background: #e0f2fe; color: #075985; border-radius: 10px; padding: 8px 12px; font-size: 13px; margin-bottom: 10px; text-align: center; }
+.hc-warn { background: #fee2e2; color: #991b1b; border-radius: 10px; padding: 8px 12px; font-size: 13px; margin-bottom: 10px; text-align: center; }
 </style>

@@ -2,9 +2,9 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { toRaw } from 'vue'
-import { game, ui, money, settings } from './state.js'
+import { game, ui, money, settings, daySeconds, modeMods, hooks } from './state.js'
 import { world } from './world.js'
-import { PID, DAY_SECONDS, FREEZER, DECOR } from './config.js'
+import { PID, FREEZER, DECOR } from './config.js'
 import { roleName } from './people.js'
 import { dims, boxSlots, stockRoom, onFloor, isUsable, backPartner, elbowOf, DIRS, planKey } from './layout.js'
 import { nextPlan } from './build.js'
@@ -183,10 +183,14 @@ export class Renderer {
     this.controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN }
     this.controls.enableDamping = true; this.controls.dampingFactor = 0.12
     this.controls.minDistance = 6; this.controls.maxDistance = 30
+    this.camAngle = Math.atan2(0.5, 0.9)
+    this.targetCamAngle = this.camAngle
+    this.camKeys = new Set()
 
     this.initOutline()
     this.initInput()
     this.initTags()
+    hooks.rebuildShop = () => { this.builtKey = ''; this.buildShop() }
     setThumbMaker((key) => this.makeBuildModel(key))
     addEventListener('resize', () => this.resize())
     this.resize()
@@ -268,9 +272,22 @@ export class Renderer {
     const c = new THREE.Vector3(d.cols / 2 - 0.5, 0, d.rows / 2 + 0.5)
     this.controls.target.copy(c); this.base = c.clone(); this.follow = c.clone()
     const dist = 8 + d.cols * 1.35
-    this.camera.position.copy(c).add(new THREE.Vector3(0.5, 0.95, 0.9).normalize().multiplyScalar(dist))
+    const hDist = Math.hypot(0.5, 0.9)
+    const offset = new THREE.Vector3(Math.sin(this.camAngle) * hDist, 0.95, Math.cos(this.camAngle) * hDist).normalize().multiplyScalar(dist)
+    this.camera.position.copy(c).add(offset)
     this.controls.update()
     this.sun.position.copy(c).add(new THREE.Vector3(-7, 13, 7)); this.sun.target.position.copy(c)
+  }
+  rotateCamera(dir) {
+    this.targetCamAngle += dir * (Math.PI / 4)
+  }
+  zoomCamera(dir) {
+    const offset = this.camera.position.clone().sub(this.controls.target)
+    const curDist = offset.length()
+    const nextDist = Math.max(this.controls.minDistance, Math.min(this.controls.maxDistance, curDist + dir * 2.2))
+    offset.setLength(nextDist)
+    this.camera.position.copy(this.controls.target).add(offset)
+    this.controls.update()
   }
 
   // ---------- estrutura estática da loja ----------
@@ -748,6 +765,10 @@ export class Renderer {
         const face = new THREE.Mesh(new THREE.CircleGeometry(0.34, 40), new THREE.MeshBasicMaterial({ map: this.clockTex(this.clockHM[0], this.clockHM[1]), transparent: true, toneMapped: false }))
         face.position.set(0, 1.75, 0.065); model.add(face)
         gr.userData.clock = face; this.clocks.push(face)
+      } else if (d.type === 'alarm') {
+        model.add(box(0.34, 0.24, 0.1, 0x3b2f4a, 0, 1.9, 0.04))
+        const siren = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), new THREE.MeshBasicMaterial({ color: 0xe5352b, toneMapped: false }))
+        siren.position.set(0, 1.9, 0.1); model.add(siren)
       } else {
         const hue = d.hue || 0, [w, h] = hue === 1 ? [0.9, 0.55] : [0.55, 0.7], col = [0xf2b8a8, 0xa8d4c8, 0xf2d58a][hue % 3]
         model.add(box(w + 0.1, h + 0.1, 0.05, 0x7a5a3a, 0, 1.5, 0)); model.add(box(w, h, 0.06, col, 0, 1.5, 0.01))
@@ -829,6 +850,28 @@ export class Renderer {
     if (!c) { if (ui.theft) ui.theft = null; return }
     const p = new THREE.Vector3(c.x, 1.6, c.z).project(this.camera)
     ui.theft = { x: ((p.x + 1) / 2) * this.canvas.clientWidth, y: ((1 - p.y) / 2) * this.canvas.clientHeight, left: c.theft.t / 3 }
+  }
+  syncChatBubbles() {
+    const now = Date.now()
+    const out = []
+    const speakers = [world.player, ...(world.remoteActors || [])]
+    for (const a of speakers) {
+      if (!a?.chat) continue
+      const age = now - a.chat.startAt
+      if (age > (a.chat.dur || 6500)) { a.chat = null; continue }
+      const p = new THREE.Vector3(a.x, a.kind === 'visitor' ? 1.88 : 1.76, a.z).project(this.camera)
+      if (p.z > 1) continue
+      out.push({
+        id: a.chat.id,
+        actorId: a.id,
+        fromName: a.chat.fromName || a.name || game.playerName || 'Jogador',
+        text: a.chat.text,
+        x: Math.round(((p.x + 1) / 2) * this.canvas.clientWidth),
+        y: Math.round(((1 - p.y) / 2) * this.canvas.clientHeight),
+        fading: age > (a.chat.dur || 6500) - 600,
+      })
+    }
+    ui.chatBubbles = out
   }
   syncLamp() {
     const L = this.regLamp
@@ -984,15 +1027,18 @@ export class Renderer {
         }
       }
       this.tagView('s' + s.id, v, 'shelf', s.id, s.groupId || 's' + s.id)
-      const k = `${s.product}|${s.price}|${s.count}|${!!s.broken}`
+      const exp = modeMods().expiration && s.product && s.count > 0 ? s.daysLeft : null
+      const k = `${s.product}|${s.price}|${s.count}|${!!s.broken}|${exp}`
       if (k !== v.key) {
         v.key = k
         const p = s.product && PID[s.product], pid = s.product || null
         let d
         if (s.broken) d = { text: s.count ? `desligado · ${s.count}` : 'desligado', bg: '#e0675d', fg: '#fff', pid }
         else if (!p) d = { text: 'vazia', bg: '#cfc6b8', fg: '#6b6070' }
+        else if (exp != null && exp <= 0) d = { text: `VENCIDO · ${s.count}`, bg: '#e0675d', fg: '#fff', pid }
         else if (s.price == null) d = { text: 'sem preço', bg: '#f4a09a', pid }
         else if (s.count === 0) d = { text: 'esgotado', bg: '#f4a09a', pid }
+        else if (exp === 1) d = { text: `${money(s.price).slice(3)} · ${s.count} (1d)`, bg: '#f8dfa2', pid }
         else d = { text: `${money(s.price).slice(3)} · ${s.count}`, bg: s.count <= 6 ? '#f8dfa2' : '#f6e7cf', pid }
         this.tagText('s' + s.id, d)
       }
@@ -1053,6 +1099,7 @@ export class Renderer {
     const shirt = a.kind === 'player' ? C.coral : a.kind === 'staff' ? (a.role === 'cashier' ? C.mustard : C.teal) : a.kind === 'tech' ? C.plum : new THREE.Color().setHSL(hue, 0.45, 0.68).getHex()
     const ch = a.kind === 'pet' ? assets.makeAnim(a.species)
       : a.kind === 'player' ? makeAvatar(settings.avatar) || assets.makeCharacter(settings.character)
+      : a.kind === 'visitor' ? makeAvatar(a.avatar || settings.avatar) || assets.makeCharacter(0)
       : a.kind === 'staff' && a.member ? assets.makePersonModel(a.member.g, a.member.look)
       : a.kind === 'customer' ? assets.makePersonModel(a.g, a.look) // mesmo sexo do nome
       : a.kind === 'tech' ? assets.makeWorker()
@@ -1061,6 +1108,7 @@ export class Renderer {
     let mixer = null, clips = {}
     if (ch) {
       if (a.kind === 'staff') assets.putHat(ch.obj, 'cap', STAFF_CAP[a.role] || '#6fb3a8')
+      else if (a.robber) assets.putHat(ch.obj, 'beanie', '#8a1f1f')
       else if (a.thief) assets.putHat(ch.obj, 'beanie', '#3b2f4a')
       ch.obj.traverse((o) => { if (o.isMesh) o.castShadow = false }) // quem anda usa a sombra redonda no chão
       body.add(ch.obj)
@@ -1097,6 +1145,10 @@ export class Renderer {
       const SHORT = { cashier: 'Caixa', stocker: a.member.g === 'f' ? 'Repositora' : 'Repositor', barista: 'Café', courier: 'Moto', cleaner: 'Faxina' }
       const badge = sprite(tagTex(SHORT[a.role] || roleName(a.role, a.member.g), STAFF_CAP[a.role] || '#6fb3a8'), 0.8, 0.25); badge.position.y = 1.22; gr.add(badge)
     }
+    if (a.kind === 'visitor') {
+      const badge = sprite(tagTex(a.name || 'Visitante', '#6fb3a8', '#ffffff'), 1.05, 0.3)
+      badge.position.y = 1.48; gr.add(badge)
+    }
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.22, 14), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18 }))
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.01; shadow.userData.noOutline = true; gr.add(shadow)
     gr.position.set(a.x, 0, a.z)
@@ -1109,7 +1161,7 @@ export class Renderer {
     for (const [id, v] of this.actorViews) if (!alive.has(id)) { this.scene.remove(v.gr); this.actorViews.delete(id) }
     for (const a of list) {
       let v = this.actorViews.get(a.id)
-      const skin = a.kind === 'player' ? JSON.stringify(settings.avatar) : a.kind === 'pet' ? a.species : a.member ? `${a.member.g}${a.member.look}` : ''
+      const skin = a.kind === 'player' ? JSON.stringify(settings.avatar) : a.kind === 'visitor' ? `${a.name || ''}|${JSON.stringify(a.avatar || {})}` : a.kind === 'pet' ? a.species : a.member ? `${a.member.g}${a.member.look}` : ''
       if (v && v.skin !== skin) { this.scene.remove(v.gr); v = null }
       if (!v) { v = this.makeActorView(a); v.skin = skin; this.actorViews.set(a.id, v) }
       v.gr.position.x = a.x; v.gr.position.z = a.z
@@ -1169,6 +1221,9 @@ export class Renderer {
       } else if (type === 'crumbs') { // farelo
         g.fillStyle = '#c8903f'
         for (let i = 0; i < 22; i++) blob(64 + Math.cos(i * 2.4) * (12 + (i * 7) % 40), 64 + Math.sin(i * 2.4) * (10 + (i * 5) % 36), 4 + (i % 3) * 2, 0.85)
+      } else if (type === 'pee') { // poça de xixi
+        g.fillStyle = '#eab308'
+        blob(64, 64, 42, 0.72); blob(40, 52, 20, 0.65); blob(86, 78, 18, 0.65); blob(72, 32, 14, 0.6)
       } else { // algo derramado
         g.fillStyle = '#9a7a4a'
         blob(64, 64, 40, 0.55); blob(40, 50, 18, 0.55); blob(88, 80, 16, 0.55); blob(70, 30, 12, 0.5)
@@ -1310,7 +1365,8 @@ export class Renderer {
 
   // ---------- horário do dia ----------
   applyTime() {
-    let f = game.phase === 'open' || game.phase === 'lunch' ? game.clock / DAY_SECONDS : game.phase === 'closing' ? 0.97 : game.phase === 'night' ? 1.5 : 0
+    const dur = daySeconds()
+    let f = game.phase === 'open' || game.phase === 'lunch' ? game.clock / dur : game.phase === 'closing' ? 0.97 : game.phase === 'night' ? 1.5 : 0
     let a = KEYS[0], b = KEYS[1]
     for (let i = 0; i < KEYS.length - 1; i++) if (f >= KEYS[i].t && f <= KEYS[i + 1].t) { a = KEYS[i]; b = KEYS[i + 1] }
     const k = b.t === a.t ? 0 : (f - a.t) / (b.t - a.t)
@@ -1375,13 +1431,36 @@ export class Renderer {
     this.camera.position.x += dx; this.camera.position.z += dz
   }
   updateCamera(dt) {
+    let da = this.targetCamAngle - this.camAngle
+    if (Math.abs(da) > 0.0005) {
+      const step = da * Math.min(1, dt * 10)
+      this.camAngle += step
+      const offset = this.camera.position.clone().sub(this.controls.target)
+      offset.applyAxisAngle(UP, step)
+      this.camera.position.copy(this.controls.target).add(offset)
+    }
+    world.camAngle = this.camAngle
+
     const pl = world.player, f = this.follow, t = this.controls.target, b = this.base
     const k = 1 - Math.exp(-dt * 4)
     const dx = (b.x + (pl.x - b.x) * 0.55 - f.x) * k, dz = (b.z + (pl.z - b.z) * 0.55 - f.z) * k
     f.x += dx; f.z += dz
     this.shiftView(dx, dz)
+
+    const ck = this.camKeys
+    const ix = (ck.has('right') ? 1 : 0) - (ck.has('left') ? 1 : 0)
+    const iz = (ck.has('down') ? 1 : 0) - (ck.has('up') ? 1 : 0)
+    if (ix || iz) {
+      ui.recenter = false
+      const len = Math.hypot(ix, iz), panSpeed = 9 * dt
+      const sin = Math.sin(this.camAngle), cos = Math.cos(this.camAngle)
+      const px = ((ix * cos + iz * sin) / len) * panSpeed
+      const pz = ((-ix * sin + iz * cos) / len) * panSpeed
+      this.shiftView(px, pz)
+    }
+
     // andar pelo teclado ou pedir para centralizar traz a visão de volta
-    if (world.keys.size || ui.recenter) {
+    if ((world.keys.size || ui.recenter) && !ck.size) {
       const back = 1 - Math.exp(-dt * 5)
       this.shiftView((f.x - t.x) * back, (f.z - t.z) * back)
       if (Math.hypot(f.x - t.x, f.z - t.z) < 0.05) ui.recenter = false
@@ -1418,13 +1497,15 @@ export class Renderer {
     this._mo = mo
     const selection = this.selectedObjects(mo)
     this.updateCamera(dt)
+    this.syncChatBubbles()
     this.syncTags()
     this.syncBuild()
     // relógio da parede + cenário animado
-    const hh = 9 + (game.phase === 'open' || game.phase === 'lunch' ? (game.clock / DAY_SECONDS) * 12 : game.phase === 'prep' ? -0.5 : game.phase === 'night' ? 12 : 12)
+    const dur = daySeconds()
+    const hh = 9 + (game.phase === 'open' || game.phase === 'lunch' ? (game.clock / dur) * 12 : game.phase === 'prep' ? -0.5 : game.phase === 'night' ? 12 : 12)
     const hi = Math.floor(hh), mi = Math.floor((hh % 1) * 60 / 5) * 5
     if (this.clockKey !== hi * 100 + mi) { this.clockKey = hi * 100 + mi; this.clockHM = [hi, mi]; for (const c of this.clocks) { c.material.map = this.clockTex(hi, mi); c.material.needsUpdate = true } }
-    const dayF = game.phase === 'open' || game.phase === 'lunch' ? Math.sin(Math.min(1, game.clock / DAY_SECONDS) * Math.PI) * 0.9 + 0.1 : game.phase === 'prep' ? 0.5 : game.phase === 'closing' ? 0.15 : 0
+    const dayF = game.phase === 'open' || game.phase === 'lunch' ? Math.sin(Math.min(1, game.clock / dur) * Math.PI) * 0.9 + 0.1 : game.phase === 'prep' ? 0.5 : game.phase === 'closing' ? 0.15 : 0
     this.scenery.update(dt, dayF, this.lampLevel || 0)
     this.r.render(this.scene, this.camera)
     this.renderOutline(selection)

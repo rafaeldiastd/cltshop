@@ -1,7 +1,8 @@
-import { game, ui, hooks, toast, newStats, uid, wages, save, stockFull, money, settings, costOf, refOf, demandOf, rollMarket, cafePrice, cafeCost, cafeRef, customersPerDay, maxCustomers, shelfCap, hasPerk, gainXp, cafeMenu, productPrice, clockText } from './state.js'
-import { PRODUCTS, PID, DAY_SECONDS, PACK, MOODS, PETS, CAMERA_STOP_CHANCE, CAFE, LUNCH, SHELF_BOOST, FENG_SHUI, ARCADE, NIGHT_LIGHTS, DELIVERY, PET, TEAM, FREEZER, TECH, DIRT, DOORMAT, DECOR, canStockProduct } from './config.js'
+import { game, ui, hooks, toast, newStats, uid, wages, save, stockFull, money, settings, costOf, refOf, demandOf, rollMarket, cafePrice, cafeCost, cafeRef, customersPerDay, maxCustomers, shelfCap, hasPerk, gainXp, cafeMenu, productPrice, clockText, modeMods, regionMods, daySeconds, branchDailyProfit, stockInfo, boxCost, stockFree, pranksLeft, usePrankQuota } from './state.js'
+import { PRODUCTS, PID, DAY_SECONDS, PACK, MOODS, PETS, CAMERA_STOP_CHANCE, CAFE, LUNCH, SHELF_BOOST, FENG_SHUI, ARCADE, NIGHT_LIGHTS, DELIVERY, PET, TEAM, FREEZER, TECH, DIRT, DOORMAT, DECOR, canStockProduct, shelfLifeOf, ROBBERY } from './config.js'
 import { onDuty, isOff, walkMult, workMult, serveMult, skillSpeed, energyDrain, gainMemberXp, restTeam, teamMorning, ensureCandidates } from './team.js'
-import { makeGoals, checkGoals } from './goals.js'
+import { makeGoals, checkGoals, checkBigGoals } from './goals.js'
+import { mp, broadcastClean, broadcastPet, broadcastPrank, sendEmote } from './multiplayer.js'
 import { dims, cashierTile, queueTiles, doorTile, doorInside, shelfAccess, shelfPoint, stockStand, stockRoom, inStock, boxSlots, isUsable } from './layout.js'
 import { sfx } from './audio.js'
 import { hoverText } from './texts.js'
@@ -31,6 +32,7 @@ class Actor {
   update(dt, world) {
     if (this.emoteT > 0 && (this.emoteT -= dt) <= 0) this.emote = null
     if (this.bubbleT > 0 && (this.bubbleT -= dt) <= 0) this.bubble = null
+    if (this.kind === 'visitor' || (window.__visiting && this.remoteSync)) return
     for (let guard = 0; guard < 8; guard++) {
       const s = this.steps[0]
       if (!s) { this.moving = false; return }
@@ -77,13 +79,102 @@ class World {
     this.pets = []
     this._lastPrompt = null
     this.queueTiles = []
+    this.camAngle = null
+    this.remoteActors = []
+    this.robberyTimes = null
+    this.playerIdleT = 0
+    this.cashierEmptyT = 0
+    this.pomoPrepT = 0
     hooks.refreshGrid = () => this.refreshGrid()
     hooks.shiftActors = (dx, dz) => this.shiftActors(dx, dz)
     hooks.beforeSave = () => { game.playerPos = { x: this.player.x, z: this.player.z, face: this.player.face } }
+    hooks.getPlayerState = () => ({ x: this.player.x, z: this.player.z, face: this.player.face, moving: this.player.moving, emote: this.player.emote, anim: this.player.anim })
+    hooks.setPlayerPos = (x, z, face = 0) => { this.player.x = x; this.player.z = z; this.player.face = face; this.player.setSteps([]) }
+    hooks.sayEmote = (e, t = 3) => this.player.say(e, t)
+    hooks.sayChat = (entry) => { this.player.chat = entry }
+    hooks.showBubble = (text, emote) => {
+      this.player.bubble = text
+      this.player.bubbleT = 2.6
+      if (emote) this.player.say(emote, 2.4)
+    }
+    hooks.resetEntities = () => { this.customers = []; this.queue = []; this.staff = []; this.pets = []; this.activeTheft = null; this.tech = null; this.remoteActors = []; this.remoteEntities = null }
+    const r2 = (n) => Math.round((n || 0) * 100) / 100
+    hooks.getHostEntities = () => ({
+      pets: this.pets.map((p) => ({ id: p.id, species: p.species, x: r2(p.x), z: r2(p.z), face: r2(p.face), moving: p.moving, emote: p.emote })),
+      staff: this.staff.map((s) => ({
+        id: s.id, role: s.role,
+        member: s.member ? { id: s.member.id, name: s.member.name, g: s.member.g, look: s.member.look, role: s.member.role } : null,
+        x: r2(s.x), z: r2(s.z), face: r2(s.face), moving: s.moving, emote: s.emote, pose: s.pose, anim: s.anim,
+      })),
+      customers: this.customers.map((c) => ({
+        id: c.id, name: c.name, age: c.age, g: c.g, look: c.look, hue: c.hue,
+        robber: !!c.robber, thief: !!c.thief,
+        x: r2(c.x), z: r2(c.z), face: r2(c.face), moving: c.moving, emote: c.emote, bubble: c.bubble, bubbleT: c.bubbleT, anim: c.anim,
+      })),
+    })
+    hooks.syncHostEntities = (ent) => { this.remoteEntities = ent }
+    hooks.remoteClean = (x, z) => {
+      const idx = game.dirt.findIndex((d) => Math.round(d.x) === Math.round(x) && Math.round(d.z) === Math.round(z))
+      if (idx >= 0) { game.dirt.splice(idx, 1); game.today.cleaned++ }
+    }
+    hooks.remotePet = (fromName) => {
+      const pet = this.pets[0]
+      if (!pet) return
+      pet.happy = Math.max(pet.happy || 0, PET.pat)
+      pet.say('❤️', 2.4)
+      pet.setSteps([wait(0.8)])
+      if (!window.__visiting) toast(`🐾 ${fromName || 'Um visitante'} fez carinho em ${PETS[pet.species]?.name || 'seu pet'}!`, 'good')
+    }
+    hooks.remotePrank = ({ x, z, action, newPrice, fromName }) => {
+      if (action === 'pee') {
+        game.dirt.push({ id: uid(), x, z, type: 'pee', level: 2, ox: 0, oz: 0, rot: 0, res: null })
+        if (!window.__visiting) {
+          toast(`🚽 ${fromName || 'Visitante'} mijou no chão da sua loja!`, 'bad')
+          sfx('bad')
+        }
+        return
+      }
+      const s = game.shelves.find((sh) => sh.x === x && sh.z === z)
+      if (!s || !s.product) return
+      const pName = PID[s.product]?.name || 'produto'
+      if (action === 'swap_price' || action === 'unprice') {
+        s.price = newPrice != null ? newPrice : 0
+        if (!window.__visiting) {
+          toast(`😈 ${fromName || 'Visitante'} bagunçou o preço de ${pName} para ${money(s.price)}!`, 'bad')
+          sfx('bad')
+        }
+      } else if (action === 'unstock' && s.count > 0) {
+        const pid = s.product, qty = s.count, daysLeft = s.daysLeft ?? shelfLifeOf(pid)
+        s.count = 0
+        s.product = null
+        s.daysLeft = null
+        if (!window.__visiting) {
+          let rem = qty
+          for (const b of game.boxes) {
+            if (b.state === 'open' && b.product === pid && b.count < PACK) {
+              const add = Math.min(rem, PACK - b.count)
+              b.count += add
+              rem -= add
+              if (rem <= 0) break
+            }
+          }
+          while (rem > 0) {
+            const take = Math.min(rem, PACK)
+            const empty = game.boxes.find((b) => b.state === 'empty' && !b.res)
+            if (empty) Object.assign(empty, { product: pid, count: take, state: 'open', keep: false, daysLeft })
+            else if (!stockFull()) game.boxes.push({ id: uid(), product: pid, count: take, state: 'open', daysLeft })
+            else break
+            rem -= take
+          }
+          toast(`😈 ${fromName || 'Visitante'} esvaziou a prateleira de ${pName} (${qty}x de volta às caixas)!`, 'bad')
+          sfx('bad')
+        }
+      }
+    }
     this.refreshGrid()
   }
 
-  get actors() { return [this.player, ...this.staff, ...this.customers, ...this.pets, ...(this.tech ? [this.tech] : [])] }
+  get actors() { return [this.player, ...this.staff, ...this.customers, ...this.pets, ...this.remoteActors, ...(this.tech ? [this.tech] : [])] }
 
   // ---------- grade / caminhos ----------
   refreshGrid() {
@@ -216,19 +307,30 @@ class World {
     const n = Math.min(box.count, shelfCap() - shelf.count)
     if (n <= 0) return toast('Prateleira cheia', 'bad')
     if (shelf.product !== box.product) { shelf.product = box.product; shelf.price = game.priceMemory[box.product] ?? null }
+    const boxDays = box.daysLeft ?? shelfLifeOf(box.product)
+    if (shelf.count <= 0) shelf.daysLeft = boxDays
+    else shelf.daysLeft = Math.min(shelf.daysLeft ?? boxDays, boxDays)
     shelf.count += n
     box.count -= n
     sfx('pop')
     who?.play?.('pick-up')
     if (box.count <= 0) {
-      // a caixa do jogador fica vazia na mão; a dos repositores eles mesmos descartam
-      if (who?.kind === 'player') { box.state = 'empty'; box.product = null; box.keep = false }
+      const autoEmpty = game.mode === 'lofi' && game.pomodoro?.autoPilot && ui.selectedBox !== box.id
+      if (who?.kind === 'player' && !autoEmpty) { box.state = 'empty'; box.product = null; box.keep = false }
       else {
         game.boxes.splice(game.boxes.indexOf(box), 1)
         if (ui.selectedBox === box.id) ui.selectedBox = null
       }
     } else toast(`Sobraram ${box.count} na caixa`, 'info')
-    if (shelf.price == null && who?.kind === 'player') { ui.panelShelf = shelf.id; toast('Defina o preço dessa prateleira') }
+    if (shelf.price == null && who?.kind === 'player') {
+      if (game.mode === 'lofi' && game.pomodoro?.autoPilot) {
+        shelf.price = refOf(shelf.product)
+        game.priceMemory[shelf.product] = shelf.price
+      } else {
+        ui.panelShelf = shelf.id
+        toast('Defina o preço dessa prateleira')
+      }
+    }
   }
 
   // valida se o produto pode ficar neste tipo de móvel/expositor
@@ -247,17 +349,18 @@ class World {
     const n = Math.min(PACK, shelf.count)
     box.product = shelf.product
     box.count = n
+    box.daysLeft = shelf.daysLeft ?? shelfLifeOf(shelf.product)
     box.state = 'open'
     box.keep = true // retirada de propósito: o repositor só usa se o produto acabar
     shelf.count -= n
-    if (!shelf.count) { shelf.product = null; shelf.price = null } // esvaziada de propósito fica livre
+    if (!shelf.count) { shelf.product = null; shelf.price = null; shelf.daysLeft = null } // esvaziada de propósito fica livre
     sfx('pop')
     toast(`${n} ${PID[box.product].name} ${n === 1 ? 'foi' : 'foram'} para a caixa`)
   }
 
   // ---------- comandos do jogador ----------
   // no caixa o jogador fica preso até clicar em "Sair do caixa"
-  cmd(steps) { if (!this.player.cashiering) this.player.setSteps(steps) }
+  cmd(steps) { if (!this.player.cashiering) { this.playerIdleT = 0; this.player.setSteps(steps) } }
   leaveRegister() {
     const p = this.player
     if (!p.cashiering) return
@@ -377,23 +480,98 @@ class World {
     if (this.close(this.player, di.x, di.z + 0.5)) return act()
     this.cmd([go(di.x, di.z), call(act)])
   }
+  cmdVisitPet() {
+    const pet = this.pets[0], p = this.player
+    if (!pet) return
+    const beside = this.besideTile(pet.x, pet.z)
+    const near = this.close(p, pet.x, pet.z, 1.3)
+    pet.setSteps([wait(near ? 3 : 6)])
+    this.cmd([...(near || !beside ? [] : [go(beside.x, beside.z)]), call(() => {
+      p.face = Math.atan2(pet.x - p.x, pet.z - p.z)
+      p.play('emote-yes')
+      p.say('❤️', 2.2)
+      pet.happy = Math.max(pet.happy || 0, PET.pat)
+      pet.say('❤️', 2.4)
+      pet.setSteps([wait(0.8)])
+      sfx('pop')
+      const name = PETS[pet.species]?.name || 'o pet'
+      toast(`🐾 Você fez carinho em ${name}!`, 'good')
+      broadcastPet()
+    })])
+  }
+  cmdPeeFloor() {
+    if (!window.__visiting) return
+    if ((game.career?.earned || 0) < 1) return toast('🔒 Alcance o Nível 1 (dando gorjetas ou na sua loja) para liberar: Mijar no Chão!', 'bad')
+    if (pranksLeft() <= 0) return toast('😈 Você já usou suas 3 bagunças de hoje (UTC)! Volte amanhã.', 'bad')
+    if (!usePrankQuota()) return
+    const p = this.player
+    const x = Math.round(p.x * 10) / 10, z = Math.round(p.z * 10) / 10
+    p.play('emote-yes')
+    sendEmote('🚽')
+    sfx('bad')
+    game.dirt.push({ id: uid(), x, z, type: 'pee', level: 2, ox: 0, oz: 0, rot: 0, res: null })
+    toast(`🚽 Você mijou no chão da loja! (${pranksLeft()}/3 restantes hoje)`, 'good')
+    broadcastPrank({ x, z, action: 'pee' })
+  }
+  cmdPrankShelf(shelf) {
+    if (shelf?.product === 'lock') {
+      return toast('🔒 Alcance o Nível 2 para liberar: Esvaziar Prateleira! (Ou use Trocar Preço)', 'bad')
+    }
+    if (!shelf || !shelf.product) return toast('Escolha uma prateleira com produtos para bagunçar!', 'info')
+    if (pranksLeft() <= 0) return toast('😈 Você já usou suas 3 bagunças de hoje (UTC)! Volte amanhã.', 'bad')
+    const wantUnstock = ui.prankMode === 'unstock'
+    if (wantUnstock && (game.career?.earned || 0) < 2) {
+      return toast('🔒 Alcance o Nível 2 para liberar: Esvaziar Prateleira! (Ou use Trocar Preço)', 'bad')
+    }
+    const action = wantUnstock && shelf.count > 0 ? 'unstock' : 'swap_price'
+    const st = shelfAccess(shelf), pt = shelfPoint(shelf)
+    this.cmd([...(this.close(this.player, pt.x, pt.z, 1.7) ? [] : [go(st.x, st.z)]), work(1.1, 'Bagunçando…', () => {
+      if (!shelf.product) return
+      if (!usePrankQuota()) return toast('😈 Limite de 3 bagunças diárias atingido!', 'bad')
+      const pName = PID[shelf.product]?.name || 'produto'
+      this.player.play('pick-up')
+      sendEmote('😈')
+      sfx('pop')
+      if (action === 'swap_price') {
+        const ref = refOf(shelf.product)
+        const newPrice = Math.random() < 0.5
+          ? Math.max(0.5, Math.round(ref * 0.25 * 2) / 2)
+          : Math.round(ref * 2.8 * 2) / 2
+        shelf.price = newPrice
+        toast(`🏷️ Você trocou o preço de ${pName} para ${money(newPrice)}! (${pranksLeft()}/3 restantes hoje)`, 'good')
+        broadcastPrank({ x: shelf.x, z: shelf.z, action: 'swap_price', newPrice })
+      } else {
+        shelf.count = 0
+        shelf.product = null
+        shelf.daysLeft = null
+        toast(`📦 Você esvaziou a prateleira de ${pName}! (${pranksLeft()}/3 restantes hoje)`, 'good')
+        broadcastPrank({ x: shelf.x, z: shelf.z, action: 'unstock' })
+      }
+    })])
+  }
 
   // ---------- interação por proximidade (tecla E) ----------
   computeTarget() {
     const p = this.player
     if (ui.modal || ui.editing || p.cashiering) return null
-    const carrying = game.boxes.find((b) => b.id === ui.selectedBox)
     const cands = []
-    const slots = boxSlots(game.boxes, game.plan)
-    if (!carrying) for (const b of game.boxes) { const q = slots.get(b.id); cands.push({ kind: 'box', id: b.id, x: q.x + 0.3, z: q.z + 0.3 }) }
-    else for (const b of game.boxes) if ((b.state === 'open' || b.state === 'empty') && b.id !== carrying.id) { const q = slots.get(b.id); cands.push({ kind: 'box', id: b.id, x: q.x + 0.3, z: q.z + 0.3 }) }
-    for (const s of game.shelves) cands.push({ kind: 'shelf', id: s.id, ...shelfPoint(s) })
-    cands.push({ kind: 'counter', id: 'c', x: game.register.x, z: game.register.z })
-    if (game.phase === 'prep' || game.phase === 'lunch') { const di = doorInside(game.plan); cands.push({ kind: 'door', id: 'door', x: di.x, z: di.z + 0.6 }) }
-    for (const a of this.pets) cands.push({ kind: 'pet', id: a.id, x: a.x, z: a.z })
-    for (const d of game.dirt) cands.push({ kind: 'dirt', id: d.id, x: d.x + d.ox, z: d.z + d.oz })
-    if (game.cafe) cands.push({ kind: 'cafe', id: game.cafe.id, x: game.cafe.x, z: game.cafe.z })
-    for (const d of game.decor) if (isUsable(d)) cands.push({ kind: 'decor', id: d.id, x: d.x, z: d.z })
+    if (window.__visiting) {
+      for (const s of game.shelves) if (s.product) cands.push({ kind: 'shelf', id: s.id, ...shelfPoint(s) })
+      for (const a of this.pets) cands.push({ kind: 'pet', id: a.id, x: a.x, z: a.z })
+      for (const d of game.dirt) cands.push({ kind: 'dirt', id: d.id, x: d.x + d.ox, z: d.z + d.oz })
+    } else {
+      const carrying = game.boxes.find((b) => b.id === ui.selectedBox)
+      const slots = boxSlots(game.boxes, game.plan)
+      if (!carrying) for (const b of game.boxes) { const q = slots.get(b.id); cands.push({ kind: 'box', id: b.id, x: q.x + 0.3, z: q.z + 0.3 }) }
+      else for (const b of game.boxes) if ((b.state === 'open' || b.state === 'empty') && b.id !== carrying.id) { const q = slots.get(b.id); cands.push({ kind: 'box', id: b.id, x: q.x + 0.3, z: q.z + 0.3 }) }
+      for (const s of game.shelves) cands.push({ kind: 'shelf', id: s.id, ...shelfPoint(s) })
+      cands.push({ kind: 'counter', id: 'c', x: game.register.x, z: game.register.z })
+      if (game.phase === 'prep' || game.phase === 'lunch') { const di = doorInside(game.plan); cands.push({ kind: 'door', id: 'door', x: di.x, z: di.z + 0.6 }) }
+      for (const a of this.pets) cands.push({ kind: 'pet', id: a.id, x: a.x, z: a.z })
+      for (const d of game.dirt) cands.push({ kind: 'dirt', id: d.id, x: d.x + d.ox, z: d.z + d.oz })
+      if (game.cafe) cands.push({ kind: 'cafe', id: game.cafe.id, x: game.cafe.x, z: game.cafe.z })
+      for (const d of game.decor) if (isUsable(d)) cands.push({ kind: 'decor', id: d.id, x: d.x, z: d.z })
+    }
     let best = null, bs = 1e9
     const fx = Math.sin(p.face), fz = Math.cos(p.face)
     const inside = inStock(game.plan, p.x, p.z)
@@ -410,6 +588,12 @@ class World {
   interact() {
     const t = this.target
     if (!t) return false
+    if (window.__visiting) {
+      if (t.kind === 'dirt') { this.cmdClean(game.dirt.find((x) => x.id === t.id)); return true }
+      if (t.kind === 'pet') { this.cmdVisitPet(); return true }
+      if (t.kind === 'shelf') { this.cmdPrankShelf(game.shelves.find((x) => x.id === t.id)); return true }
+      return false
+    }
     const p = this.player
     if (t.kind === 'box') { const b = game.boxes.find((x) => x.id === t.id); if (b) this.cmdBox(b) }
     else if (t.kind === 'shelf') { const s = game.shelves.find((x) => x.id === t.id); if (s) this.cmdShelf(s) }
@@ -445,19 +629,65 @@ class World {
     toast('Loja aberta!', 'good')
     sfx('chime')
   }
-  closeEarly() { if (game.phase === 'open') game.clock = DAY_SECONDS }
-  get hour() { return 9 + (game.clock / DAY_SECONDS) * 12 }
+  closeEarly() { if (game.phase === 'open') game.clock = daySeconds() }
+  get hour() { return 9 + (game.clock / daySeconds()) * 12 }
+
+  updateExpiration() {
+    if (!modeMods().expiration) return
+    let boxSpoiled = 0, shelfAutoDiscarded = 0, shelfExpiredLeft = 0, expiringSoon = 0
+    for (let i = game.boxes.length - 1; i >= 0; i--) {
+      const b = game.boxes[i]
+      if (b.state === 'empty' || !b.product || b.count <= 0) continue
+      b.daysLeft = (b.daysLeft ?? shelfLifeOf(b.product)) - 1
+      if (b.daysLeft <= 0) {
+        boxSpoiled += b.count
+        game.today.expired += b.count
+        game.today.expiredValue += b.count * costOf(b.product)
+        game.boxes.splice(i, 1)
+      }
+    }
+    const hasStocker = game.team.some((m) => m.role === 'stocker')
+    for (const s of game.shelves) {
+      if (!s.product || s.count <= 0) { s.daysLeft = null; continue }
+      s.daysLeft = (s.daysLeft ?? shelfLifeOf(s.product)) - 1
+      if (s.daysLeft <= 0) {
+        if (hasStocker) {
+          shelfAutoDiscarded += s.count
+          game.today.expired += s.count
+          game.today.expiredValue += s.count * costOf(s.product)
+          s.count = 0; s.daysLeft = null; s.product = null; s.price = null
+        } else {
+          shelfExpiredLeft++
+        }
+      } else if (s.daysLeft === 1) {
+        expiringSoon++
+      }
+    }
+    if (boxSpoiled) toast(`🗑️ ${boxSpoiled} unidades no estoque venceram e foram descartadas`, 'bad')
+    if (shelfAutoDiscarded) toast(`📦 Repositores descartaram ${shelfAutoDiscarded} itens vencidos das prateleiras`, 'info')
+    if (shelfExpiredLeft) toast(`⚠️ ${shelfExpiredLeft} prateleira(s) com produto vencido! Descarte no painel`, 'bad')
+    if (expiringSoon) toast(`⏰ ${expiringSoon} prateleira(s) vencem hoje! Faça promoção −30%`, 'info')
+  }
 
   endDay() {
     checkGoals(true)
     const t = game.today
     const w = wages()
     game.money -= w
+    let branchProfit = 0
+    for (const b of game.branches || []) branchProfit += branchDailyProfit(b)
+    if (branchProfit !== 0) {
+      game.money += branchProfit
+      t.branchRevenue = branchProfit
+    }
     this.activeTheft = null
     this.thiefTimes = null
+    this.robberyTimes = null
     game.summary = {
-      day: game.day, revenue: t.revenue, cogs: t.cogs, wages: w, profit: t.revenue - t.cogs - w - t.stolen - t.maintenance - t.spoiledValue,
+      day: game.day, revenue: t.revenue, cogs: t.cogs, wages: w,
+      profit: t.revenue + (t.branchRevenue || 0) - t.cogs - w - t.stolen - t.maintenance - t.spoiledValue - (t.expiredValue || 0) - (t.sanitaryFine || 0),
       maintenance: t.maintenance, spoiled: t.spoiled, spoiledValue: t.spoiledValue, cleaned: t.cleaned, dirty: t.dirty,
+      expired: t.expired || 0, expiredValue: t.expiredValue || 0, sanitaryFine: t.sanitaryFine || 0, branchRevenue: t.branchRevenue || 0,
       goals: game.goals.map((g) => ({ text: g.text, done: g.done, xp: g.xp })),
       stolen: t.stolen, stolenUnits: t.stolenUnits, caught: t.caught, cafeSales: t.cafeSales, cafeRevenue: t.cafeRevenue, lunchMissed: t.lunchMissed,
       deliveries: t.deliveries || 0, deliveryRevenue: t.deliveryRevenue || 0, arcadeRevenue: t.arcadeRevenue || 0, petFound: t.petFound || 0, impulse: t.impulse || 0,
@@ -467,20 +697,42 @@ class World {
     game.phase = 'night'
     rollMarket()
     this.player.setSteps([]); this.player.cashiering = false
+    if (game.mode === 'lofi') {
+      if (!game.pomodoro) game.pomodoro = { focusMin: 25, breakMin: 5, autoCycle: true, autoRestock: true, autoPilot: true, sessions: 0 }
+      game.pomodoro.sessions = (game.pomodoro.sessions || 0) + 1
+      if (game.pomodoro.autoRestock) {
+        let ordered = 0
+        for (const p of PRODUCTS.filter((x) => game.unlocked[x.id])) {
+          const info = stockInfo(p.id)
+          if (info.shelves + info.boxes + info.incoming < PACK && stockFree() > 0 && game.money - boxCost(p.id) > 150) {
+            game.money -= boxCost(p.id)
+            const o = game.pending.find((x) => x.product === p.id && (x.size || PACK) === PACK)
+            if (o) o.boxes++
+            else game.pending.push({ product: p.id, boxes: 1, size: PACK })
+            ordered++
+          }
+        }
+        if (ordered) toast(`🎧 Lo-Fi: ${ordered} caixa(s) pedida(s) automaticamente para amanhã`, 'info')
+      }
+      if (game.pomodoro.autoCycle) ui.pomoBreakLeft = Math.max(10, (game.pomodoro.breakMin || 5) * 60)
+    }
     ui.modal = 'summary'
     sfx('chime')
   }
   startNextDay() {
+    ui.pomoBreakLeft = 0
+    this.pomoPrepT = 0
     game.day++
     game.phase = 'prep'
     game.clock = 0
     game.today = newStats()
     let n = 0
-    for (const o of game.pending) for (let i = 0; i < o.boxes; i++, n++) game.boxes.push({ id: uid(), product: o.product, count: o.size || PACK, state: 'dock', res: null })
+    for (const o of game.pending) for (let i = 0; i < o.boxes; i++, n++) game.boxes.push({ id: uid(), product: o.product, count: o.size || PACK, state: 'dock', res: null, daysLeft: shelfLifeOf(o.product) })
     game.pending = []
     ui.modal = null
     if (n) toast(`Entrega chegou: ${n} caixas na calçada`, 'good')
     this.overnightSpoil()
+    this.updateExpiration()
     teamMorning()
     makeGoals()
     save()
@@ -499,12 +751,13 @@ class World {
       lightsMult = 1 + Math.min(NIGHT_LIGHTS.max, lightsCount * NIGHT_LIGHTS.each)
     }
     const clean = 1 - DIRT.spawn * this.dirtiness()
-    return (customersPerDay() / DAY_SECONDS) * (curve / 1.09) * variety * rep * lightsMult * clean
+    return (customersPerDay() / daySeconds()) * (curve / 1.09) * variety * rep * lightsMult * clean
   }
   spawnCustomer() {
     const { cols, rows } = this.d
     const left = Math.random() < 0.5
-    const c = new Actor({ id: 'c' + uid(), kind: 'customer', ...newNpcIdentity(), x: left ? -3 : cols + 2, z: rows + 2, speed: rnd(1.6, 2.1), basket: [], wants: [], came: [], issues: [], patience: PATIENCE, waiting: false, hue: Math.random(), felt: new Set() })
+    const mm = modeMods(), rm = regionMods()
+    const c = new Actor({ id: 'c' + uid(), kind: 'customer', ...newNpcIdentity(), x: left ? -3 : cols + 2, z: rows + 2, speed: rnd(1.6, 2.1), basket: [], wants: [], came: [], issues: [], patience: PATIENCE * mm.patience * rm.patience, waiting: false, hue: Math.random(), felt: new Set() })
     const pool = PRODUCTS.filter((p) => game.unlocked[p.id])
     const maxItems = hasPerk('basket2') ? 5 : hasPerk('basket1') ? 4 : 3
     const n = Math.min(pool.length, 1 + Math.floor(Math.random() * maxItems))
@@ -514,11 +767,11 @@ class World {
       let r = Math.random() * total, pick = bag[0]
       for (const p of bag) { if ((r -= demandOf(p.id)) <= 0) { pick = p; break } }
       bag.splice(bag.indexOf(pick), 1)
-      c.wants.push({ pid: pick.id, qty: Math.random() < 0.6 ? 1 : 2, willing: refOf(pick.id) * rnd(0.85, 1.35) })
+      c.wants.push({ pid: pick.id, qty: Math.random() < 0.6 ? 1 : 2, willing: refOf(pick.id) * rnd(0.85, 1.35) * mm.willing * rm.willing })
     }
     c.came = c.wants.map((w) => ({ pid: w.pid, qty: w.qty })) // foto do que veio buscar (wants vai sendo consumido na loja)
     game.today.customers++
-    if (this.cafeOpen() && Math.random() < CAFE.chance * (game.weather === 'cold' ? 1.3 : game.weather === 'hot' ? 0.8 : 1)) c.cafeOrder = this.pickCafeItem()
+    if (this.cafeOpen() && Math.random() < CAFE.chance * (regionMods().cafe ?? 1) * (game.weather === 'cold' ? 1.3 : game.weather === 'hot' ? 0.8 : 1)) c.cafeOrder = this.pickCafeItem()
     c.cafeCame = c.cafeOrder?.name ?? null
     const dt = doorTile(game.plan), di = doorInside(game.plan)
     c.setSteps([go(dt.x, dt.z), go(di.x, di.z), call(() => { c.entered = true; this.feel(c, this.firstImpression(c), 2); this.maybeDirt(c, 'mud') }), wait(1), call(() => this.shopNext(c))])
@@ -622,6 +875,19 @@ class World {
       game.today.lostValue += w.qty * refOf(w.pid)
       c.issues.push({ kind: 'missing', pid: w.pid }) // a prateleira estava vazia ou quebrada
       this.feel(c, 'missing')
+    } else if (modeMods().expiration && shelf.daysLeft != null && shelf.daysLeft <= 0) {
+      game.today.oos[w.pid] = (game.today.oos[w.pid] || 0) + w.qty
+      game.today.lostValue += w.qty * refOf(w.pid)
+      c.issues.push({ kind: 'missing', pid: w.pid })
+      this.feel(c, 'expired')
+      game.rep = Math.max(1, game.rep - 0.03)
+      if (game.mode === 'hardcore' && Math.random() < 0.25) {
+        const fine = 80
+        game.money -= fine
+        game.today.sanitaryFine = (game.today.sanitaryFine || 0) + fine
+        sfx('alarm')
+        toast('🚨 Fiscalização Sanitária: multa de R$ 80 por produto vencido na prateleira!', 'bad')
+      }
     } else if (shelf.price > maxPay) {
       game.today.price[w.pid] = (game.today.price[w.pid] || 0) + w.qty
       game.today.lostValue += w.qty * refOf(w.pid)
@@ -686,7 +952,11 @@ class World {
     t.cogs += cafeCost(item.id)
     t.cafeSales++
     t.cafeRevenue += price
-    if (!c.basket.length) t.served++
+    if (!c.basket.length) {
+      t.served++
+      game.lifetime.served = (game.lifetime.served || 0) + 1
+    }
+    game.lifetime.revenue = (game.lifetime.revenue || 0) + price
     c.hadCafe = true
     c.cafeBuy = { name: item.name, price }
     c.bubble = money(price); c.bubbleT = 2.6
@@ -717,6 +987,8 @@ class World {
     let total = 0
     for (const b of c.basket) { total += b.qty * b.price; t.units += b.qty; t.cogs += b.qty * costOf(b.pid); t.sold[b.pid] = (t.sold[b.pid] || 0) + b.qty }
     game.money += total; t.revenue += total; t.served++
+    game.lifetime.served = (game.lifetime.served || 0) + 1
+    game.lifetime.revenue = (game.lifetime.revenue || 0) + total
     game.rep = Math.min(5, game.rep + 0.02)
     gainXp(1)
     for (const a of this.staff) if (a.role === 'cashier' && a.serving) { gainMemberXp(a.member, 1); a.play('interact-right') }
@@ -753,10 +1025,18 @@ class World {
     return { ...ui.npcInfo, status: ui.npcInfo.kind === 'staff' ? 'Saiu da equipe' : 'Saiu da loja' }
   }
 
-  // ---------- ladrão: aparece de vez em quando; clicar no balão em 3 segundos evita o roubo ----------
+  // ---------- ladrão (furtos evitáveis) e assaltos esporádicos (sem reação manual) ----------
   planThieves() {
+    if (!modeMods().thieves) { this.thiefTimes = []; this.robberyTimes = []; return }
+    const dur = daySeconds()
     const n = game.day < 2 ? 0 : Math.random() < 0.35 ? 2 : 1
-    this.thiefTimes = Array.from({ length: n }, () => rnd(0.15, 0.85) * DAY_SECONDS).filter((t) => t > game.clock).sort((a, b) => a - b)
+    this.thiefTimes = Array.from({ length: n }, () => rnd(0.15, 0.85) * dur).filter((t) => t > game.clock).sort((a, b) => a - b)
+    this.robberyTimes = []
+    if (modeMods().robberies && game.day >= ROBBERY.minDay) {
+      const chance = (game.mode === 'hardcore' ? ROBBERY.hardcoreChance : ROBBERY.baseChance) * regionMods().crime
+      if (Math.random() < chance) this.robberyTimes.push(rnd(0.25, 0.8) * dur)
+      this.robberyTimes = this.robberyTimes.filter((t) => t > game.clock).sort((a, b) => a - b)
+    }
   }
   spawnThief() {
     if (this.customers.some((c) => c.thief)) return
@@ -769,12 +1049,48 @@ class World {
     c.setSteps([go(dt.x, dt.z), go(di.x, di.z), call(() => (c.entered = true)), go(a.x, a.z), call(() => this.startTheft(c, shelf))])
     this.customers.push(c)
   }
+  spawnRobber() {
+    if (this.customers.some((c) => c.robber) || !game.register) return
+    const { cols, rows } = this.d, left = Math.random() < 0.5
+    const c = new Actor({ id: 'r' + uid(), kind: 'customer', thief: true, robber: true, ...newNpcIdentity(), x: left ? -3 : cols + 2, z: rows + 2, speed: 2.6, basket: [], wants: [], came: [], issues: [], patience: 999, waiting: false, hue: 0.02, felt: new Set() })
+    const dt = doorTile(game.plan), di = doorInside(game.plan), a = shelfAccess(game.register)
+    c.setSteps([go(dt.x, dt.z), go(di.x, di.z), call(() => (c.entered = true)), go(a.x, a.z), call(() => this.startRobbery(c))])
+    this.customers.push(c)
+  }
   startTheft(c, shelf) {
     if (!shelf.count) return this.leave(c)
     if (game.decor.some((d) => d.type === 'camera') && Math.random() < CAMERA_STOP_CHANCE) return this.foilTheft(c, 'A câmera de segurança afastou um ladrão!')
     this.feel(c, 'sneaky', THEFT_SECONDS + 0.2)
     c.theft = { shelf, t: THEFT_SECONDS }
     this.activeTheft = c
+  }
+  startRobbery(c) {
+    if (game.decor.some((d) => d.type === 'alarm') && Math.random() < 0.8) {
+      game.lifetime.robberiesStopped = (game.lifetime.robberiesStopped || 0) + 1
+      sfx('alarm')
+      return this.foilTheft(c, '🚨 O alarme policial espantou o assaltante!')
+    }
+    if (game.decor.some((d) => d.type === 'camera') && Math.random() < 0.35) {
+      game.lifetime.robberiesStopped = (game.lifetime.robberiesStopped || 0) + 1
+      return this.foilTheft(c, '📹 A câmera de segurança impediu o assalto!')
+    }
+    sfx('alarm')
+    this.feel(c, 'robber', ROBBERY.seconds)
+    toast('🔫 Assalto no caixa!', 'bad')
+    c.setSteps([wait(ROBBERY.seconds), call(() => this.finishRobbery(c))])
+  }
+  finishRobbery(c) {
+    const amount = Math.min(Math.max(0, game.money), Math.round(rnd(ROBBERY.stealMin, ROBBERY.stealMax) * (1 + game.level * 0.4)))
+    if (amount > 0) {
+      game.money -= amount
+      game.today.stolen += amount
+    }
+    game.rep = Math.max(1, game.rep - 0.08)
+    this.feel(c, 'stole', 2.4)
+    sfx('alarm')
+    toast(amount > 0 ? `🔫 Assaltaram o caixa! Levaram ${money(amount)}` : '🔫 Tentaram assaltar o caixa, mas estava vazio!', 'bad')
+    c.speed = 3.5
+    this.leave(c)
   }
   stopTheft() {
     const c = this.activeTheft
@@ -822,7 +1138,7 @@ class World {
       }
       for (const a of arcades) {
         if (Math.hypot(c.x - a.x, c.z - a.z) <= ARCADE.radius) {
-          const coin = Math.round(rnd(ARCADE.min, ARCADE.max) * 2) / 2
+          const coin = Math.round(rnd(ARCADE.min, ARCADE.max) * (regionMods().arcade ?? 1) * 2) / 2
           game.money += coin
           game.today.arcadeRevenue = (game.today.arcadeRevenue || 0) + coin
           game.today.revenue += coin
@@ -843,7 +1159,7 @@ class World {
     if (this.delivAcc >= DELIVERY.every) {
       this.delivAcc = 0 // um sorteio por intervalo
       const w = DELIVERY.weather[game.weather] || DELIVERY.weather.mild
-      if (openOrders.length < DELIVERY.maxOpen && Math.random() < DELIVERY.rate * w.rate) this.spawnDeliveryOrder()
+      if (openOrders.length < DELIVERY.maxOpen && Math.random() < DELIVERY.rate * w.rate * (regionMods().delivery ?? 1)) this.spawnDeliveryOrder()
     }
   }
   spawnDeliveryOrder() {
@@ -881,6 +1197,8 @@ class World {
       t.sold[it.pid] = (t.sold[it.pid] || 0) + it.qty
     }
     game.money += order.total
+    game.lifetime.served = (game.lifetime.served || 0) + 1
+    game.lifetime.revenue = (game.lifetime.revenue || 0) + order.total
     game.rep = Math.min(5, game.rep + 0.03)
     gainXp(1)
     for (const a of this.staff) if (a.role === 'courier') gainMemberXp(a.member, 2)
@@ -895,7 +1213,7 @@ class World {
   dirtiness() { return Math.min(1, game.dirt.reduce((s, d) => s + d.level, 0) / DIRT.full) }
   maybeDirt(c, type) {
     if (c.thief) return
-    let chance = type === 'mud' ? DIRT.enter : type === 'spill' ? DIRT.spill : DIRT.crumbs
+    let chance = (type === 'mud' ? DIRT.enter : type === 'spill' ? DIRT.spill : DIRT.crumbs) * modeMods().dirt * regionMods().dirt
     let x = Math.round(c.x), z = Math.round(c.z)
     if (type === 'mud') {
       // o tapete segura boa parte da sujeira; com frio (chão molhado) entra mais
@@ -922,6 +1240,7 @@ class World {
     game.today.cleaned++
     sfx('pop')
     if (who?.member) gainMemberXp(who.member, 1)
+    broadcastClean(spot.x, spot.z)
   }
   cmdClean(spot) {
     if (!spot) return
@@ -940,9 +1259,9 @@ class World {
 
   // ---------- freezers: o motor gasta com o uso; quebrado, não vende e os gelados estragam ----------
   sellable(s) { return s.count > 0 && s.price != null && !s.broken }
-  useFreezer(s, units) { if (s.fridge && !s.broken) s.wear = Math.min(100, (s.wear || 0) + units * FREEZER.wearPerUnit) }
+  useFreezer(s, units) { if (s.fridge && !s.broken) s.wear = Math.min(100, (s.wear || 0) + units * FREEZER.wearPerUnit * modeMods().freezerWear * regionMods().freezerWear) }
   updateFreezers(dt) {
-    const hot = game.weather === 'hot' ? FREEZER.hot : 1
+    const hot = (game.weather === 'hot' ? FREEZER.hot : 1) * modeMods().freezerWear * regionMods().freezerWear
     for (const s of game.shelves) {
       if (!s.fridge || s.x < 0) continue
       if (s.broken) {
@@ -1048,15 +1367,16 @@ class World {
 
   // ---------- IA de equipe ----------
   ensurePets() {
-    if (this.pets.length) { this.pets[0].species = settings.pet; return }
-    this.pets.push(new Actor({ id: 'pet1', kind: 'pet', species: settings.pet, x: 6, z: 3, speed: 0.9 }))
+    const sp = window.__visiting ? (game.visitedPet || settings.pet) : settings.pet
+    if (this.pets.length) { this.pets[0].species = sp; return }
+    this.pets.push(new Actor({ id: 'pet1', kind: 'pet', species: sp, x: 6, z: 3, speed: 0.9 }))
   }
   petAI(a) {
     if (a.happy > 0) {
       a.happy -= 0.05
       a.speed = 2.4
       if (Math.random() < 0.02) a.say('❤️', 1.8)
-      if (Math.random() < 0.01) this.petFind(a)
+      if (!window.__visiting && Math.random() < 0.01) this.petFind(a)
     } else {
       a.speed = 0.9
     }
@@ -1081,8 +1401,12 @@ class World {
     let n = 0
     for (const a of this.staff) if (a.role === 'stocker' || a.role === 'cleaner') a.n = n++
     // caixa e sujeira reservadas por quem saiu voltam a ficar livres
-    for (const b of game.boxes) if (b.res && !this.staff.some((s) => s.id === b.res)) b.res = null
-    for (const d of game.dirt) if (d.res && !this.staff.some((s) => s.id === d.res)) d.res = null
+    for (const b of game.boxes) if (b.res && b.res !== 'player' && !this.staff.some((s) => s.id === b.res)) b.res = null
+    for (const d of game.dirt) if (d.res && d.res !== 'player' && !this.staff.some((s) => s.id === d.res)) d.res = null
+    if (this.player.idle && !this.player.work) {
+      for (const b of game.boxes) if (b.res === 'player') b.res = null
+      for (const d of game.dirt) if (d.res === 'player') d.res = null
+    }
   }
   staffAI(a) {
     if (!a.idle) return
@@ -1191,9 +1515,15 @@ class World {
   movePlayer(dt) {
     if (ui.editing || ui.modal || this.player.cashiering) return
     const k = this.keys, p = this.player
-    const dx = (k.has('d') ? 1 : 0) - (k.has('a') ? 1 : 0)
-    const dz = (k.has('s') ? 1 : 0) - (k.has('w') ? 1 : 0)
-    if (!dx && !dz) return
+    const rx = (k.has('d') ? 1 : 0) - (k.has('a') ? 1 : 0)
+    const rz = (k.has('s') ? 1 : 0) - (k.has('w') ? 1 : 0)
+    if (!rx && !rz) return
+    this.playerIdleT = 0
+    const baseAngle = Math.atan2(0.5, 0.9)
+    const rot = (this.camAngle ?? baseAngle) - baseAngle
+    const cos = Math.cos(rot), sin = Math.sin(rot)
+    const dx = rx * cos + rz * sin
+    const dz = -rx * sin + rz * cos
     if (p.steps.length || p.work) p.setSteps([])
     const l = Math.hypot(dx, dz), sp = 3.3 * dt
     const nx = p.x + (dx / l) * sp, nz = p.z + (dz / l) * sp
@@ -1203,8 +1533,168 @@ class World {
     p.moving = true
   }
 
+  syncRemoteActors(dt) {
+    const list = mp.visitors || []
+    const alive = new Set(list.map((v) => v.id))
+    this.remoteActors = this.remoteActors.filter((a) => alive.has(a.id))
+    for (const v of list) {
+      let a = this.remoteActors.find((x) => x.id === v.id)
+      if (!a) {
+        a = new Actor({ id: v.id, kind: 'visitor', name: v.name, avatar: v.avatar, x: v.x, z: v.z, face: v.face || 0, moving: !!v.moving, emote: v.emote || null, anim: v.anim || null, chat: v.chat || null })
+        this.remoteActors.push(a)
+      }
+      const dist = Math.hypot((v.x ?? a.x) - a.x, (v.z ?? a.z) - a.z)
+      const k = Math.min(1, dt * 12)
+      a.x += (v.x - a.x) * k
+      a.z += (v.z - a.z) * k
+      a.face = v.face ?? a.face
+      a.moving = Boolean(v.moving || dist > 0.03)
+      a.emote = v.emote || null
+      if (v.anim) a.anim = v.anim
+      if (v.chat) a.chat = v.chat
+      a.name = v.name || a.name
+      if (v.avatar) a.avatar = v.avatar
+    }
+  }
+
+  syncRemoteEntities(dt) {
+    const ent = this.remoteEntities
+    if (!ent) {
+      this.ensurePets()
+      for (const a of this.pets) { a.remoteSync = false; this.petAI(a) }
+      return
+    }
+    const k = Math.min(1, dt * 10)
+    const pList = ent.pets || []
+    const pAlive = new Set(pList.map((p) => p.id))
+    this.pets = this.pets.filter((a) => pAlive.has(a.id))
+    for (const p of pList) {
+      let a = this.pets.find((x) => x.id === p.id)
+      if (!a) {
+        a = new Actor({ id: p.id, kind: 'pet', species: p.species || settings.pet, x: p.x, z: p.z, face: p.face || 0, remoteSync: true })
+        this.pets.push(a)
+      }
+      a.remoteSync = true
+      const dist = Math.hypot((p.x ?? a.x) - a.x, (p.z ?? a.z) - a.z)
+      a.x += (p.x - a.x) * k
+      a.z += (p.z - a.z) * k
+      a.face = p.face ?? a.face
+      a.moving = Boolean(p.moving || dist > 0.02)
+      a.species = p.species || a.species
+      a.emote = p.emote || (a.emoteT > 0 ? a.emote : null)
+    }
+    const sList = ent.staff || []
+    const sAlive = new Set(sList.map((s) => s.id))
+    this.staff = this.staff.filter((a) => sAlive.has(a.id))
+    for (const s of sList) {
+      let a = this.staff.find((x) => x.id === s.id)
+      if (!a) {
+        a = new Actor({ id: s.id, kind: 'staff', role: s.role, member: s.member, x: s.x, z: s.z, face: s.face || 0, remoteSync: true })
+        this.staff.push(a)
+      }
+      a.remoteSync = true
+      const dist = Math.hypot((s.x ?? a.x) - a.x, (s.z ?? a.z) - a.z)
+      a.x += (s.x - a.x) * k
+      a.z += (s.z - a.z) * k
+      a.face = s.face ?? a.face
+      a.moving = Boolean(s.moving || dist > 0.03)
+      a.emote = s.emote || null
+      a.pose = s.pose || null
+      if (s.anim) a.anim = s.anim
+      if (s.member) a.member = s.member
+    }
+    const cList = ent.customers || []
+    const cAlive = new Set(cList.map((c) => c.id))
+    this.customers = this.customers.filter((a) => cAlive.has(a.id))
+    for (const c of cList) {
+      let a = this.customers.find((x) => x.id === c.id)
+      if (!a) {
+        a = new Actor({ id: c.id, kind: 'customer', name: c.name, age: c.age, g: c.g, look: c.look, hue: c.hue, robber: c.robber, thief: c.thief, x: c.x, z: c.z, face: c.face || 0, remoteSync: true })
+        this.customers.push(a)
+      }
+      a.remoteSync = true
+      const dist = Math.hypot((c.x ?? a.x) - a.x, (c.z ?? a.z) - a.z)
+      a.x += (c.x - a.x) * k
+      a.z += (c.z - a.z) * k
+      a.face = c.face ?? a.face
+      a.moving = Boolean(c.moving || dist > 0.03)
+      a.emote = c.emote || null
+      a.bubble = c.bubble || null
+      a.bubbleT = c.bubbleT || 1.5
+      if (c.anim) a.anim = c.anim
+    }
+  }
+
+  runLofiAutoPilot(dt) {
+    if (game.mode !== 'lofi' || !game.pomodoro?.autoPilot || ui.editing || ui.build || ui.modal) return
+    const p = this.player
+    if (p.cashiering) {
+      if (!this.queue.length && (game.phase === 'open' || game.phase === 'prep')) {
+        this.cashierEmptyT += dt
+        if (this.cashierEmptyT > 2.5) { p.cashiering = false; p.work = null; this.cashierEmptyT = 0 }
+      } else this.cashierEmptyT = 0
+      return
+    }
+    if (!p.idle || p.work) { this.playerIdleT = 0; return }
+    if ((game.phase === 'open' || game.phase === 'closing') && this.queue.length > 0 && !this.registerStaffed()) {
+      this.cmdServe()
+      return
+    }
+    this.playerIdleT += dt
+    if (this.playerIdleT < 1.8) return
+    this.playerIdleT = 0
+
+    // 1. Limpar sujeira
+    const dirt = game.dirt.find((d) => !d.res)
+    if (dirt) { dirt.res = 'player'; this.cmdClean(dirt); return }
+
+    // 2. Se já está segurando uma caixa aberta, repõe a prateleira compatível
+    const heldBox = game.boxes.find((b) => b.id === ui.selectedBox)
+    if (heldBox?.state === 'open') {
+      const sh = game.shelves.find((s) => s.product === heldBox.product && s.count < shelfCap() && !s.broken && canStockProduct(heldBox.product, s))
+      if (sh) { heldBox.res = 'player'; this.cmd(this.shelve(heldBox, sh, 1, p)); return }
+    }
+
+    // 3. Repor prateleiras já configuradas
+    const shelves = game.shelves.filter((x) => x.product && x.count < shelfCap() && !x.broken && canStockProduct(x.product, x)).sort((a, b) => a.count - b.count)
+    for (const s of shelves) {
+      const free = (b) => !b.res && !b.at && b.product === s.product
+      const open = game.boxes.find((b) => b.state === 'open' && free(b))
+      if (open) { open.res = 'player'; this.cmd(this.shelve(open, s, 1, p)); return }
+      const closed = game.boxes.find((b) => b.state === 'stock' && free(b))
+      if (closed) { closed.res = 'player'; this.cmd(this.unpack(closed, 1, p)); return }
+      const dock = !stockFull() && game.boxes.find((b) => b.state === 'dock' && free(b))
+      if (dock) { dock.res = 'player'; this.cmd(this.receive(dock, 1, p)); return }
+    }
+
+    // 4. Receber e desembalar caixas paradas na calçada/estoque
+    const dockAny = !stockFull() && game.boxes.find((b) => b.state === 'dock' && !b.res)
+    if (dockAny) { dockAny.res = 'player'; this.cmd(this.receive(dockAny, 1, p)); return }
+    const stockAny = game.boxes.find((b) => b.state === 'stock' && !b.res)
+    if (stockAny) { stockAny.res = 'player'; this.cmd(this.unpack(stockAny, 1, p)); return }
+
+    // 5. Manutenção preventiva dos freezers
+    const worn = game.shelves.find((s) => s.fridge && !s.call && (s.broken || (s.wear || 0) >= FREEZER.warn))
+    if (worn) this.callTech(worn)
+  }
+
   // ---------- loop ----------
   update(rawDt) {
+    this.syncRemoteActors(rawDt)
+    if (window.__visiting) {
+      this.syncRemoteEntities(rawDt)
+      for (const a of this.actors) a.update(rawDt, this)
+      this.movePlayer(rawDt)
+      this.target = this.computeTarget()
+      const prompt = this.target ? hoverText(this.target) : null
+      if (prompt !== this._lastPrompt) { this._lastPrompt = prompt; ui.prompt = prompt }
+      ui.action = this.player.work ? { ...this.player.work } : null
+      return
+    }
+    if (!game.paused && game.phase === 'night' && game.mode === 'lofi' && game.pomodoro?.autoCycle && ui.pomoBreakLeft > 0) {
+      ui.pomoBreakLeft = Math.max(0, ui.pomoBreakLeft - rawDt)
+      if (ui.pomoBreakLeft <= 0) this.startNextDay()
+    }
     if (ui.npc) { // painel do cliente aberto: atualiza o resumo algumas vezes por segundo
       this.npcT = (this.npcT || 0) - rawDt
       if (this.npcT <= 0) { this.npcT = 0.25; ui.npcInfo = this.npcSnapshot(ui.npc) }
@@ -1221,24 +1711,32 @@ class World {
     this.updateArcade(dt)
     this.updateTech(dt)
     if (live) { this.updateFreezers(dt); this.updateEnergy(dt) }
-    // metas do dia e catálogo de candidatos: conferidos duas vezes por segundo
+    if (game.phase === 'prep' && game.mode === 'lofi' && game.pomodoro?.autoCycle) {
+      this.pomoPrepT = (this.pomoPrepT || 0) + rawDt
+      const dockLeft = game.boxes.some((b) => b.state === 'dock')
+      if ((!dockLeft && this.pomoPrepT > 3) || this.pomoPrepT > 14) this.openShop()
+    }
+    this.runLofiAutoPilot(rawDt)
+    // metas do dia, metas grandes e catálogo de candidatos: conferidos duas vezes por segundo
     this.goalT = (this.goalT || 0) + dt
     if (this.goalT > 0.5) {
       this.goalT = 0
       if (game.goalsDay !== game.day) makeGoals()
       if (live) checkGoals()
+      checkBigGoals()
       if (!game.candidates.length) ensureCandidates()
     }
 
     if (game.phase === 'open') {
       game.clock += dt
-      if (game.clock >= DAY_SECONDS) this.closeDoors()
+      if (game.clock >= daySeconds()) this.closeDoors()
       else if (game.lunchOn && !game.lunchDone && game.clock >= LUNCH.start && game.clock < LUNCH.end) this.startLunch()
       else {
         this.spawnAcc += this.spawnRate() * dt
         while (this.spawnAcc >= 1) { this.spawnAcc -= 1; if (this.customers.length < maxCustomers()) this.spawnCustomer() }
         if (!this.thiefTimes) this.planThieves() // jogo carregado com a loja já aberta
         while (this.thiefTimes.length && this.thiefTimes[0] <= game.clock) { this.thiefTimes.shift(); this.spawnThief() }
+        while (this.robberyTimes?.length && this.robberyTimes[0] <= game.clock) { this.robberyTimes.shift(); this.spawnRobber() }
       }
     } else if (game.phase === 'closing') {
       this.closeGrace += dt

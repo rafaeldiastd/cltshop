@@ -15,11 +15,12 @@ import {
   PhArrowUp,
   PhTrash,
   PhKnife,
-  PhPlant
+  PhPlant,
+  PhClock
 } from '@phosphor-icons/vue'
 import PriceStepper from './PriceStepper.vue'
-import { game, ui, money, productPrice, setPrice, costOf, refOf, shelfCap, upgradeShelf } from '../game/state.js'
-import { PRODUCTS, PID, SHELF_BOOST, FREEZER, canStockProduct } from '../game/config.js'
+import { game, ui, money, productPrice, setPrice, costOf, refOf, shelfCap, upgradeShelf, discardExpiredShelf, applyClearanceDiscount, modeMods } from '../game/state.js'
+import { PRODUCTS, PID, SHELF_BOOST, FREEZER, canStockProduct, shelfLifeOf } from '../game/config.js'
 import { world } from '../game/world.js'
 import { productThumb } from '../game/assets.js'
 
@@ -65,7 +66,26 @@ const selectProduct = (pid) => {
   if (!shelf.value) return
   shelf.value.product = pid || null
   shelf.value.price = pid ? game.priceMemory[pid] ?? null : null
+  shelf.value.daysLeft = null
 }
+
+const expEnabled = computed(() => modeMods().expiration)
+const daysLeft = computed(() => (shelf.value?.count > 0 ? shelf.value.daysLeft ?? (p.value ? shelfLifeOf(p.value.id) : null) : null))
+const expText = computed(() => {
+  if (!p.value) return ''
+  if (shelf.value.count === 0) return `Validade padrão: ${shelfLifeOf(p.value.id)} dias`
+  const d = daysLeft.value
+  if (d <= 0) return 'Vencido! Descarte agora'
+  if (d === 1) return 'Vence hoje (1 dia)'
+  return `Vence em ${d} dias`
+})
+const expCls = computed(() => {
+  if (shelf.value?.count === 0) return 'muted'
+  const d = daysLeft.value
+  if (d <= 0) return 'bad'
+  if (d <= 2) return 'warn'
+  return 'ok'
+})
 
 // Se o freezer quebrar enquanto aberto e estiver em outra aba, podemos alertar ou abrir equipamento
 watch(() => shelf.value?.broken, (isBroken) => {
@@ -169,6 +189,28 @@ watch(() => shelf.value?.broken, (isBroken) => {
               {{ margin >= 0 ? '+' : '' }}{{ money(margin) }}
             </b>
           </div>
+        </div>
+
+        <!-- Validade do produto nesta prateleira -->
+        <div v-if="expEnabled" class="sub-card exp-card" :class="expCls">
+          <div class="sub-head">
+            <span class="sub-title"><PhClock weight="bold" /> Validade</span>
+            <span class="status-badge" :class="expCls">{{ expText }}</span>
+          </div>
+          <button
+            v-if="shelf.count > 0 && daysLeft != null && daysLeft <= 0"
+            class="btn primary sm w-full action-btn"
+            @click="discardExpiredShelf(shelf.id)"
+          >
+            <PhTrash weight="bold" /> Descartar vencidos
+          </button>
+          <button
+            v-else-if="shelf.count > 0 && daysLeft != null && daysLeft <= 2"
+            class="btn warn sm w-full action-btn"
+            @click="applyClearanceDiscount(shelf.id)"
+          >
+            <PhTag weight="bold" /> Queima de estoque (−30%)
+          </button>
         </div>
 
         <!-- Se a prateleira estiver zerada (0 un), permite trocar o produto facilmente -->
@@ -598,6 +640,14 @@ watch(() => shelf.value?.broken, (isBroken) => {
 .status-badge.bad {
   background: #fadcd9;
   color: #922c23;
+}
+.status-badge.muted {
+  background: var(--cream2);
+  color: var(--plum2);
+}
+.btn.warn {
+  background: var(--mustard);
+  color: var(--plum);
 }
 
 /* Medidor Segmentado */
