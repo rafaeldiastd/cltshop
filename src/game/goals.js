@@ -1,6 +1,6 @@
 // Metas do dia: três objetivos pequenos, contados com as estatísticas de game.today, que rendem experiência.
 import { game, toast, money, gainXp, xpNext, customersPerDay, hasPerk, modeMods } from './state.js'
-import { PID, GOALS } from './config.js'
+import { PID, GOALS, PETS, DECOR } from './config.js'
 import { planArea } from './layout.js'
 import { onDuty } from './team.js'
 
@@ -96,8 +96,15 @@ export function goalProgress(g) {
 
 function complete(g) {
   g.done = true
+  if (!game.lifetime) game.lifetime = {}
+  game.lifetime.goalsDone = (game.lifetime.goalsDone || 0) + 1
   gainXp(g.xp)
   toast(`Meta cumprida: ${g.text} (+${g.xp} XP)`, 'good')
+  for (const [id, p] of Object.entries(PETS)) {
+    if (p.goalsCount && game.lifetime.goalsDone === p.goalsCount) {
+      toast(`🐾 Novo pet exótico liberado: ${p.name}!`, 'good')
+    }
+  }
 }
 // endOfDay = o expediente acabou: as metas "até o fim do dia" que resistiram são cumpridas
 export function checkGoals(endOfDay = false) {
@@ -151,6 +158,37 @@ export function claimBigGoal(id) {
   if (g.reward.xp) { gainXp(g.reward.xp); got.push(`+${g.reward.xp} XP`) }
   if (g.reward.points) { game.career.points += g.reward.points; got.push(`+${g.reward.points} ponto de maestria`) }
   toast(`🏆 Meta grande resgatada: ${g.text} (${got.join(', ')})`, 'good')
+  for (const p of Object.values(PETS)) {
+    if (p.goal === id) toast(`🐾 Pet exótico liberado: ${p.name}!`, 'good')
+  }
+  for (const d of Object.values(DECOR)) {
+    if (d.goal === id) toast(`🎨 Nova decoração liberada: ${d.name}!`, 'good')
+  }
+}
+export function isPetUnlocked(id) {
+  const p = PETS[id]
+  if (!p) return false
+  if (p.goalsCount) return (game.lifetime?.goalsDone || 0) >= p.goalsCount
+  if (p.goal) return !!game.bigGoals?.claimed?.[p.goal]
+  return true
+}
+export function petUnlockHint(id) {
+  const p = PETS[id]
+  if (!p) return ''
+  if (p.goalsCount) return `${game.lifetime?.goalsDone || 0}/${p.goalsCount} metas diárias`
+  if (p.goal) return BIG_GOALS.find((g) => g.id === p.goal)?.text || 'Meta grande'
+  return ''
+}
+export function isDecorUnlocked(type) {
+  const d = DECOR[type]
+  if (!d) return false
+  if (d.goal) return !!game.bigGoals?.claimed?.[d.goal]
+  return true
+}
+export function decorUnlockHint(type) {
+  const d = DECOR[type]
+  if (!d?.goal) return ''
+  return BIG_GOALS.find((g) => g.id === d.goal)?.text || 'Meta grande'
 }
 export function checkBigGoals() {
   if (window.__visiting) return

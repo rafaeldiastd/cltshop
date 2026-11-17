@@ -1,5 +1,6 @@
 import { game, ui, pranksLeft } from './state.js'
 import { PID, DECOR } from './config.js'
+import { isArcade } from './layout.js'
 
 const shelfOf = (id) => game.shelves.find((s) => s.id === id)
 const boxOf = (id) => game.boxes.find((b) => b.id === id)
@@ -14,6 +15,13 @@ export function hoverText(hit) {
       const s = shelfOf(hit.id)
       const label = ui.prankMode === 'unstock' ? 'Esvaziar prateleira' : 'Trocar preço da prateleira'
       return s?.product ? `${label} (${pranksLeft()}/3 hoje)` : null
+    }
+    if (hit.kind === 'decor') {
+      const d = game.decor.find((x) => x.id === hit.id)
+      if (isArcade(d)) {
+        const rec = d.highScore?.score ? ` · 🏆 ${d.highScore.holder} (${d.highScore.score})` : ''
+        return `Ver ${DECOR[d.type]?.name || 'arcade'} & Ranking (R$ 5,00)${rec}`
+      }
     }
     return null
   }
@@ -36,14 +44,18 @@ export function hoverText(hit) {
     if (b.state === 'stock') return `Desembalar ${p.name}`
     return `Pegar caixa aberta (${b.count} ${p.name})`
   }
-  if (hit.kind === 'dirt') return 'Limpar sujeira'
+  if (hit.kind === 'dirt') {
+    const d = game.dirt.find((x) => x.id === hit.id)
+    return d?.prankedBy ? `Limpar xixi de ${d.prankedBy}` : 'Limpar sujeira'
+  }
   if (hit.kind === 'shelf') {
     const s = shelfOf(hit.id); if (!s) return null
     const name = shelfLabel(s)
-    if (s.broken && !ui.selectedBox) return s.call ? 'Motor quebrado: técnico chamado' : 'Motor quebrado: chamar técnico'
+    const prank = s.prankedBy ? ` · 😈 Bagunçada por ${s.prankedBy}` : ''
+    if (s.broken && !ui.selectedBox) return (s.call ? 'Motor quebrado: técnico chamado' : 'Motor quebrado: chamar técnico') + prank
     const b = boxOf(ui.selectedBox)
-    if (b?.state === 'empty') return s.count ? `Retirar ${PID[s.product].name} para a caixa` : `${name} sem itens`
-    return b ? `Repor com ${PID[b.product].name}` : s.product ? `Preço de ${PID[s.product].name}` : `${name} vazia — configurar`
+    if (b?.state === 'empty') return (s.count ? `Retirar ${PID[s.product].name} para a caixa` : `${name} sem itens`) + prank
+    return (b ? `Repor com ${PID[b.product].name}` : s.product ? `Preço de ${PID[s.product].name}` : `${name} vazia — configurar`) + prank
   }
   if (hit.kind === 'counter') return game.phase === 'open' || game.phase === 'closing' ? 'Atender no caixa' : 'Mudar layout da loja'
   if (hit.kind === 'pet') return 'Interagir com o pet'
@@ -52,6 +64,10 @@ export function hoverText(hit) {
   if (hit.kind === 'door') return game.phase === 'prep' ? 'Abrir a loja' : game.phase === 'lunch' ? 'Reabrir a loja (13h)' : game.phase === 'open' ? 'Loja aberta' : 'Loja fechada'
   if (hit.kind === 'decor') {
     const d = game.decor.find((x) => x.id === hit.id)
+    if (isArcade(d)) {
+      const rec = d.highScore?.score ? ` · 🏆 ${d.highScore.holder} (${d.highScore.score})` : ''
+      return `Ver ${DECOR[d.type]?.name || 'arcade'} & Ranking${rec}`
+    }
     return d?.type === 'computer' ? 'Usar o computador' : d?.type === 'radio' ? 'Mexer no rádio' : null
   }
   return null

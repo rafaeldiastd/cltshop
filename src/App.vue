@@ -26,6 +26,8 @@ import MusicPanel from './components/MusicPanel.vue'
 import CloudLock from './components/CloudLock.vue'
 import MultiplayerModal from './components/MultiplayerModal.vue'
 import StartMenuModal from './components/StartMenuModal.vue'
+import ArcadePanel from './components/ArcadePanel.vue'
+import ArcadeModal from './components/ArcadeModal.vue'
 import ChatOverlay from './components/ChatOverlay.vue'
 import { startCloud, cloudStarted, saveSoon, saveOnExit } from './game/cloud.js'
 import { mp, startMultiplayer, stopMultiplayer, visitStore, leaveVisit, sendEmote, sendTip } from './game/multiplayer.js'
@@ -37,8 +39,12 @@ const saveIfHidden = () => { if (document.hidden) saveOnExit() }
 // gastou dinheiro (compra, contratação, obra…): grava já, para o F5 não desfazer
 watch(() => game.money, (n, o) => { if (ui.ready && n < o) saveSoon() })
 
-// a prateleira e o cliente dividem o mesmo lugar na tela: abrir uma fecha a outra
-watch(() => ui.panelShelf, (v) => { if (v != null) { ui.npc = null; ui.npcInfo = null } })
+// a prateleira, o cliente e o fliperama dividem o mesmo lugar na tela: abrir um fecha os outros
+watch(() => ui.panelShelf, (v) => { if (v != null) { ui.npc = null; ui.npcInfo = null; ui.panelArcade = null } })
+watch(() => ui.npc, (v) => { if (v != null) { ui.panelArcade = null } })
+watch(() => ui.panelCafe, (v) => { if (v) { ui.panelArcade = null } })
+watch(() => ui.panelArcade, (v) => { if (v != null) { ui.panelShelf = null; ui.panelCafe = false; ui.npc = null; ui.npcInfo = null } })
+watch(() => ui.modal, (m) => { if (!m && document.activeElement !== document.body) document.activeElement?.blur?.() })
 watch(() => settings.musicOn, setMusic, { immediate: true })
 watch(() => settings.sfxOn, setSfx, { immediate: true })
 
@@ -88,20 +94,23 @@ onMounted(async () => {
   else ui.modal = 'start'
   const MOVE_MAP = { KeyW: 'w', KeyA: 'a', KeyS: 's', KeyD: 'd' }
   const CAM_MAP = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }
-  const typing = (e) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target?.tagName)
+  const typing = (e) => {
+    const el = e.target || document.activeElement
+    return ['INPUT', 'SELECT', 'TEXTAREA'].includes(el?.tagName) || !!el?.isContentEditable
+  }
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (ui.build) { stopBuild(); return }
       if (ui.editing) { if (ui.held || ui.buyTool) deselectTool(); else stopEdit(); return }
-      ui.selectedBox = null; ui.panelShelf = null; ui.panelCafe = false; ui.npc = null
+      ui.selectedBox = null; ui.panelShelf = null; ui.panelCafe = false; ui.npc = null; ui.panelArcade = null
       ui.modal = (ui.modal === 'summary' || (ui.modal === 'start' && !savesList.length)) ? ui.modal : null
       return
     }
-    if (ui.build || typing(e) || e.metaKey || e.ctrlKey) return
+    if (ui.modal || ui.build || typing(e) || e.metaKey || e.ctrlKey) return
     if (MOVE_MAP[e.code]) { world.keys.add(MOVE_MAP[e.code]); startMusic(); e.preventDefault(); return }
     if (CAM_MAP[e.code]) { rend?.camKeys.add(CAM_MAP[e.code]); startMusic(); e.preventDefault(); return }
-    if (e.code === 'Space' && !e.repeat && !ui.modal) {
-      game.paused = !game.paused
+    if (e.code === 'Space' && !e.repeat && !ui.modal && document.activeElement?.tagName !== 'BUTTON') {
+      if (game.phase === 'open' || game.phase === 'closing') game.paused = !game.paused
       e.preventDefault()
       return
     }
@@ -167,6 +176,7 @@ onBeforeUnmount(() => {
     <ShelfPanel />
     <CafePanel />
     <NpcPanel />
+    <ArcadePanel />
     <StaffBar />
     <BuildMode />
     <BottomBar />
@@ -178,6 +188,7 @@ onBeforeUnmount(() => {
     <MenuModal v-if="ui.modal === 'menu'" />
     <MultiplayerModal v-if="ui.modal === 'multiplayer'" />
     <StartMenuModal v-if="ui.modal === 'start'" />
+    <ArcadeModal v-if="ui.modal === 'arcade'" />
     <ChatOverlay />
     <div v-if="mp.visiting" class="card visit-bar">
       <span>🌐 Visitando: <b>{{ mp.visiting.storeName }}</b></span>

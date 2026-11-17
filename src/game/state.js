@@ -12,7 +12,8 @@ export const newStats = () => ({ revenue: 0, units: 0, cogs: 0, customers: 0, se
 const noMarket = () => ({ text: null, mods: {} })
 const newCareer = () => ({ xp: 0, earned: 0, points: 0, perks: {} })
 const newPomodoro = () => ({ focusMin: 25, breakMin: 5, autoCycle: true, autoRestock: true, autoPilot: true, sessions: 0 })
-const newLifetime = () => ({ served: 0, revenue: 0, robberiesStopped: 0 })
+const newLifetime = () => ({ served: 0, revenue: 0, robberiesStopped: 0, goalsDone: 0 })
+export const defaultShopStyle = () => ({ wallPaper: 'solid', wallColor: '#f2dcc0', trimColor: '#b98a5a', wallMode: 'full' })
 
 export const game = reactive({
   day: 1,
@@ -65,8 +66,12 @@ export const game = reactive({
   bigGoals: { claimed: {} },
   visitedPet: null,
   tipCount: 0,
+  dayUnlocked: {},
+  expiryPriceMemory: {},
   playerName: 'Lojista',
   shopName: 'Lojinha Lofi',
+  shopStyle: defaultShopStyle(),
+  visitorLog: [],
 })
 
 export const ui = reactive({
@@ -102,6 +107,8 @@ export const ui = reactive({
   pomoBreakLeft: 0, // contagem regressiva da pausa Pomodoro (segundos)
   chatBubbles: [],
   prankMode: 'swap_price',
+  arcadeDecorId: null,
+  panelArcade: null,
 })
 
 // preferências ficam fora do save: sobrevivem a um "Novo jogo"
@@ -183,47 +190,112 @@ export function toast(msg, kind = 'info') {
   }, TOAST_MS)
 }
 
+export function logVisitorAction({ actorName, storeCode, emoji, text, kind = 'info' }) {
+  if (!window.__visiting) {
+    if (!Array.isArray(game.visitorLog)) game.visitorLog = []
+    game.visitorLog.unshift({
+      id: uid(),
+      day: game.day,
+      time: clockText(),
+      actorName: actorName || 'Visitante',
+      storeCode: storeCode || '',
+      emoji: emoji || '👤',
+      text,
+      kind,
+    })
+    if (game.visitorLog.length > 40) game.visitorLog.length = 40
+    save()
+  }
+  toast(`${emoji || '👤'} ${text}`, kind)
+}
+
+export function mergeArcadeScores(decor, entry, incomingScores = null) {
+  if (!decor) return false
+  const prevTop = decor.highScore?.score || 0
+  if (!Array.isArray(decor.scores)) decor.scores = decor.highScore ? [decor.highScore] : []
+  const byKey = new Map()
+  const add = (rec) => {
+    if (!rec || !(rec.score > 0)) return
+    const k = rec.storeCode || rec.holder || 'Visitante'
+    const cur = byKey.get(k)
+    if (!cur || rec.score > cur.score) {
+      byKey.set(k, {
+        holder: rec.holder || cur?.holder || 'Visitante',
+        storeName: rec.storeName || cur?.storeName || '',
+        storeCode: rec.storeCode || cur?.storeCode || '',
+        score: rec.score,
+      })
+    } else if (cur) {
+      if (!cur.storeName && rec.storeName) cur.storeName = rec.storeName
+      if (!cur.storeCode && rec.storeCode) cur.storeCode = rec.storeCode
+    }
+  }
+  for (const r of decor.scores) add(r)
+  if (Array.isArray(incomingScores)) for (const r of incomingScores) add(r)
+  if (entry) add(entry)
+  decor.scores = [...byKey.values()].sort((a, b) => b.score - a.score).slice(0, 15)
+  if (decor.scores.length) decor.highScore = decor.scores[0]
+  return !!(entry && entry.score > prevTop)
+}
+
+export function setupStarterStore(plan) {
+  game.register = defaultRegister(plan)
+  game.decor = defaultDecor(plan).map((d) => ({ id: uid(), ...d }))
+  for (const s of defaultShelves(plan)) addShelf(s)
+  const dp = defaultProduce(plan), groupId = 'produce_' + uid()
+  for (const s of produceSlots(dp.x, dp.z, dp.rot, dp.style)) {
+    addShelf({ ...s, kind: 'produce', groupId })
+  }
+  settleLayout(plan, game)
+  if (!game.boxes.length) {
+    for (const p of PRODUCTS.filter((p) => p.start)) {
+      game.boxes.push({ id: uid(), product: p.id, count: PACK, state: 'dock', res: null, daysLeft: shelfLifeOf(p.id) })
+      game.bought[p.id] = PACK
+    }
+  }
+  discoverRecipes(false)
+}
+
 export function newGame(opts = {}) {
-  const plan = basePlan(0)
+  const mode = opts.mode && GAME_MODES[opts.mode] ? opts.mode : 'normal'
+  const built = mode === 'lofi'
+  const plan = basePlan(0, built)
   const pName = String(opts.playerName ?? settings.playerName ?? 'Lojista').trim() || 'Lojista'
   const sName = String(opts.shopName ?? settings.storeName ?? 'Lojinha Lofi').trim() || 'Lojinha Lofi'
-  const mode = opts.mode && GAME_MODES[opts.mode] ? opts.mode : 'normal'
+  const startMoney = GAME_MODES[mode]?.startMoney ?? START_MONEY
+  const unlocked = Object.fromEntries(PRODUCTS.filter((p) => p.start).map((p) => [p.id, true]))
   settings.playerName = pName
   settings.storeName = sName
   Object.assign(game, {
-    day: 1, phase: 'prep', clock: 0, speed: 1, paused: false, money: START_MONEY, rep: 3, level: 0, plan,
-    unlocked: Object.fromEntries(PRODUCTS.filter((p) => p.start).map((p) => [p.id, true])),
-    shelves: [], register: defaultRegister(plan), decor: defaultDecor(plan).map((d) => ({ id: uid(), ...d })),
-    boxes: [], pending: [], priceMemory: {}, team: [], candidates: [],
+    day: 1, phase: 'prep', clock: 0, speed: 1, paused: false, money: startMoney, rep: 3, level: 0, plan,
+    unlocked, dayUnlocked: { ...unlocked },
+    shelves: [], register: null, decor: [],
+    boxes: [], pending: [], priceMemory: {}, expiryPriceMemory: {}, team: [], candidates: [],
     today: newStats(), summary: null, playerPos: null, market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {},
     career: newCareer(), bought: {}, recipes: {}, orders: [], zapOn: true, decorV2: true,
     pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null,
-    mode, pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: sName, shopName: sName, playerName: pName, branches: [],
-    lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0,
+    mode, pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: sName, shopName: sName, playerName: pName, shopStyle: defaultShopStyle(), branches: [],
+    lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0, visitorLog: [],
   })
   ui.build = null
   ui.cart = {}
   ui.selectedBox = null
   ui.panelShelf = null
   ui.panelCafe = false
+  ui.panelArcade = null
+  ui.arcadeDecorId = null
   ui.modal = null
   ui.log = []
   ui.toasts = []
   ui.pomoBreakLeft = 0
   ui.prankMode = 'swap_price'
-  // prateleiras iniciais + caixas da primeira entrega
-  // começa com 3 prateleiras e 1 expositor de hortifruti (abaixo); freezers e decoração se compram depois
-  for (const s of defaultShelves(plan)) addShelf(s)
-  const dp = defaultProduce(plan), groupId = 'produce_' + uid()
-  for (const s of produceSlots(dp.x, dp.z, dp.rot, dp.style)) {
-    addShelf({ ...s, kind: 'produce', groupId })
+  if (built) {
+    setupStarterStore(plan)
+    toast('Bem-vindo à lojinha! A primeira entrega está na calçada')
+  } else {
+    discoverRecipes(false)
+    toast('🏗️ Terreno pronto! Clique em "Construir Loja" para montar sua loja e definir o estoque.', 'info')
   }
-  for (const p of PRODUCTS.filter((p) => p.start)) {
-    game.boxes.push({ id: uid(), product: p.id, count: PACK, state: 'dock', res: null, daysLeft: shelfLifeOf(p.id) })
-    game.bought[p.id] = PACK
-  }
-  discoverRecipes(false)
-  toast('Bem-vindo à lojinha! A primeira entrega está na calçada')
   hooks.refreshGrid()
 }
 
@@ -248,8 +320,83 @@ export function addShelf(spot) {
     call: null,
     techAt: null,
     daysLeft: null,
+    batches: [],
   })
   hooks.refreshGrid()
+}
+
+export function syncShelfBatches(s) {
+  if (!s || !s.product || (s.count <= 0 && (!Array.isArray(s.batches) || !s.batches.length))) {
+    if (s) { s.batches = []; s.count = 0; s.daysLeft = null }
+    return
+  }
+  const defDays = s.daysLeft ?? shelfLifeOf(s.product)
+  if (!Array.isArray(s.batches) || !s.batches.length) {
+    s.batches = [{ count: s.count, daysLeft: defDays }]
+  }
+  const byDays = new Map()
+  for (const b of s.batches) {
+    const c = Math.max(0, Math.round(b.count || 0))
+    if (!c) continue
+    const d = b.daysLeft ?? defDays
+    const prev = byDays.get(d)
+    byDays.set(d, { count: (prev?.count || 0) + c, price: b.price ?? prev?.price ?? null })
+  }
+  s.batches = [...byDays.entries()]
+    .map(([daysLeft, v]) => ({ count: v.count, daysLeft, ...(v.price != null ? { price: v.price } : {}) }))
+    .sort((a, b) => a.daysLeft - b.daysLeft)
+  s.count = s.batches.reduce((sum, b) => sum + b.count, 0)
+  s.daysLeft = s.batches.length ? s.batches[0].daysLeft : null
+}
+
+export function addShelfBatch(s, count, daysLeft) {
+  if (!s || count <= 0) return
+  if (!Array.isArray(s.batches) || !s.batches.length) {
+    s.batches = s.count > 0 ? [{ count: s.count, daysLeft: s.daysLeft ?? shelfLifeOf(s.product) }] : []
+  }
+  s.batches.push({ count, daysLeft: daysLeft ?? shelfLifeOf(s.product) })
+  syncShelfBatches(s)
+}
+
+export function consumeShelfStock(s, qty) {
+  if (!s || qty <= 0) return 0
+  syncShelfBatches(s)
+  let rem = qty, taken = 0
+  for (const b of s.batches) {
+    if (rem <= 0) break
+    const t = Math.min(rem, b.count)
+    b.count -= t
+    rem -= t
+    taken += t
+  }
+  syncShelfBatches(s)
+  return taken
+}
+
+export function transferStockBatches(from, to, maxQty) {
+  if (!from || !to || maxQty <= 0) return 0
+  syncShelfBatches(from)
+  if (!to.product || to.count <= 0) {
+    to.product = from.product
+    to.batches = []
+    to.count = 0
+  } else {
+    syncShelfBatches(to)
+  }
+  let rem = maxQty, moved = 0
+  for (const b of from.batches) {
+    if (rem <= 0) break
+    const t = Math.min(rem, b.count)
+    if (t > 0) {
+      b.count -= t
+      rem -= t
+      moved += t
+      to.batches.push({ count: t, daysLeft: b.daysLeft })
+    }
+  }
+  syncShelfBatches(from)
+  syncShelfBatches(to)
+  return moved
 }
 
 // ---------- plano de carreira ----------
@@ -450,19 +597,72 @@ export const stepPrice = (pid, d) => setPrice(pid, (productPrice(pid) ?? refOf(p
 export function discardExpiredShelf(id) {
   const s = game.shelves.find((x) => x.id === id)
   if (!s || !s.count || !s.product) return
-  game.today.expired += s.count
-  game.today.expiredValue += s.count * costOf(s.product)
+  syncShelfBatches(s)
+  const expiredQty = s.batches.filter((b) => b.daysLeft <= 0).reduce((sum, b) => sum + b.count, 0) || s.count
+  s.batches = s.batches.filter((b) => b.daysLeft > 0)
+  syncShelfBatches(s)
+  game.today.expired += expiredQty
+  game.today.expiredValue += expiredQty * costOf(s.product)
   const name = PID[s.product]?.name || 'Produto'
-  s.count = 0; s.daysLeft = null; s.product = null; s.price = null
-  toast(`${name} vencido descartado`, 'info')
+  if (s.count <= 0) { s.product = null; s.price = null }
+  toast(`${expiredQty}x ${name} vencido(s) descartado(s)`, 'info')
 }
 export function applyClearanceDiscount(id) {
   const s = game.shelves.find((x) => x.id === id)
   if (!s || !s.product) return
   const base = productPrice(s.product) ?? refOf(s.product)
   const disc = Math.max(0.2, Math.round(base * 0.7 * 100) / 100)
-  setPrice(s.product, disc)
-  toast(`Queima de estoque: ${PID[s.product].name} por ${money(disc)} (−30%)`, 'good')
+  setExpiryPrice(s.product, disc)
+  toast(`Queima de estoque: ${PID[s.product].name} perto de vencer (≤2d) por ${money(disc)} (−30%)`, 'good')
+}
+export const expiryPriceOf = (pid) => game.expiryPriceMemory?.[pid] ?? null
+export function setExpiryPrice(pid, value) {
+  if (!game.expiryPriceMemory) game.expiryPriceMemory = {}
+  if (value == null || value === '') {
+    delete game.expiryPriceMemory[pid]
+    for (const s of game.shelves) {
+      if (s.product === pid && Array.isArray(s.batches)) {
+        for (const b of s.batches) if (b.daysLeft <= 2) delete b.price
+      }
+    }
+    return
+  }
+  const price = Math.max(0.1, Math.round(Number(value) * 100) / 100)
+  if (!Number.isFinite(price)) return
+  game.expiryPriceMemory[pid] = price
+  for (const s of game.shelves) {
+    if (s.product === pid && Array.isArray(s.batches)) {
+      for (const b of s.batches) if (b.daysLeft <= 2) b.price = price
+    }
+  }
+}
+export const stepExpiryPrice = (pid, d) => {
+  const cur = expiryPriceOf(pid) ?? productPrice(pid) ?? refOf(pid)
+  setExpiryPrice(pid, cur + d)
+}
+export function setBatchPrice(shelfId, daysLeft, value) {
+  const s = game.shelves.find((x) => x.id === shelfId)
+  if (!s || !Array.isArray(s.batches)) return
+  const price = Math.max(0.1, Math.round(Number(value) * 100) / 100)
+  if (!Number.isFinite(price)) return
+  for (const b of s.batches) if (b.daysLeft === daysLeft) b.price = price
+  if (daysLeft <= 2 && s.product) {
+    if (!game.expiryPriceMemory) game.expiryPriceMemory = {}
+    game.expiryPriceMemory[s.product] = price
+  }
+}
+export function batchPrice(s, b) {
+  if (!s || !s.product) return null
+  if (b?.price != null) return b.price
+  if (modeMods().expiration && b && b.daysLeft > 0 && b.daysLeft <= 2 && game.expiryPriceMemory?.[s.product] != null) {
+    return game.expiryPriceMemory[s.product]
+  }
+  return s.price ?? game.priceMemory[s.product] ?? null
+}
+export function effectiveShelfPrice(s) {
+  if (!s || !s.product) return null
+  const front = s.batches?.[0]
+  return batchPrice(s, front)
 }
 // destaque: a prateleira chama mais atenção para o produto que está nela
 export function upgradeShelf(id) {
@@ -604,11 +804,11 @@ export function buyBranch(regionId) {
   const plan = basePlan(0)
   const shelves = []
   for (const s of defaultShelves(plan)) {
-    shelves.push({ id: uid(), x: s.x, z: s.z, rot: s.rot || 0, product: null, count: 0, price: null, kind: s.kind || 'shelf', fridge: false, boost: 0, wear: 0, broken: false, brokenT: 0, call: null, techAt: null, daysLeft: null })
+    shelves.push({ id: uid(), x: s.x, z: s.z, rot: s.rot || 0, product: null, count: 0, price: null, kind: s.kind || 'shelf', fridge: false, boost: 0, wear: 0, broken: false, brokenT: 0, call: null, techAt: null, daysLeft: null, batches: [] })
   }
   const dp = defaultProduce(plan), groupId = 'produce_' + uid()
   for (const s of produceSlots(dp.x, dp.z, dp.rot, dp.style)) {
-    shelves.push({ id: uid(), x: s.x, z: s.z, rot: s.rot || 0, groupId, slot: s.slot, style: s.style, level: s.level, reach: s.reach, grot: s.grot || 0, product: null, count: 0, price: null, kind: 'produce', fridge: false, boost: 0, wear: 0, broken: false, brokenT: 0, call: null, techAt: null, daysLeft: null })
+    shelves.push({ id: uid(), x: s.x, z: s.z, rot: s.rot || 0, groupId, slot: s.slot, style: s.style, level: s.level, reach: s.reach, grot: s.grot || 0, product: null, count: 0, price: null, kind: 'produce', fridge: false, boost: 0, wear: 0, broken: false, brokenT: 0, call: null, techAt: null, daysLeft: null, batches: [] })
   }
   const boxes = PRODUCTS.filter((p) => p.start).map((p) => ({ id: uid(), product: p.id, count: PACK, state: 'dock', res: null, daysLeft: shelfLifeOf(p.id) }))
   game.branches.push({
@@ -796,7 +996,13 @@ export function load() {
     if (!raw) return false
     const { cart, log, _rev, ...d } = JSON.parse(raw)
     // saves de versões anteriores não têm os campos novos: entram os valores padrão
-    Object.assign(game, { market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {}, plan: basePlan(d.level || 0), career: newCareer(), recipes: {}, orders: [], zapOn: true, team: [], candidates: [], pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null, mode: 'normal', pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: 'Matriz', branches: [], lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0 }, d, { speed: 1, paused: false })
+    Object.assign(game, { market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {}, plan: basePlan(d.level || 0), career: newCareer(), recipes: {}, orders: [], zapOn: true, team: [], candidates: [], pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null, mode: 'normal', pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: 'Matriz', branches: [], lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0, dayUnlocked: {}, expiryPriceMemory: {}, visitorLog: [] }, d, { speed: 1, paused: false })
+    if (game.plan && game.plan.built == null) game.plan.built = true
+    if (game.plan?.stock && !game.plan.stock.corner) game.plan.stock.corner = 'nw'
+    game.shopStyle = { ...defaultShopStyle(), ...(d.shopStyle || {}) }
+    game.visitorLog = Array.isArray(game.visitorLog) ? game.visitorLog.slice(0, 40) : []
+    if (!game.dayUnlocked || !Object.keys(game.dayUnlocked).length) game.dayUnlocked = { ...game.unlocked }
+    game.expiryPriceMemory = { ...(game.expiryPriceMemory || {}) }
     game.playerName = d.playerName || settings.playerName || 'Lojista'
     game.shopName = d.shopName || (d.branchId === 'main' ? d.branchName : null) || settings.storeName || 'Lojinha Lofi'
     if (game.branchId === 'main' && (!d.branchName || d.branchName === 'Matriz')) game.branchName = game.shopName
@@ -824,7 +1030,7 @@ export function load() {
     discoverRecipes(false)
     // pedidos do Zap em andamento dependiam do repositor e do motoboy na tela: ficam só os concluídos
     game.orders = (game.orders || []).filter((o) => o.state === 'done' || o.state === 'refused')
-    game.boxes.forEach((b) => { b.res = null; b.id = uid(); if (b.product && b.daysLeft == null) b.daysLeft = shelfLifeOf(b.product) })
+    game.boxes.forEach((b) => { b.res = null; b.id = uid(); if (b.state !== 'empty' && b.product) syncShelfBatches(b); else { b.batches = []; b.daysLeft = null } })
     game.shelves = game.shelves.filter((s) => !(s.style === 'wall' && s.slot >= 2))
     // versões de teste converteram a prateleira da ponta em outro tipo: volta ao tipo e ao giro que ela tinha
     for (const s of game.shelves) {
@@ -844,10 +1050,13 @@ export function load() {
       s.call = s.call || null
       s.techAt = null
       s.daysLeft = s.product && s.count > 0 ? (s.daysLeft ?? shelfLifeOf(s.product)) : null
+      syncShelfBatches(s)
     })
-    game.register = d.register || defaultRegister(game.plan)
-    game.decor = (d.decor || defaultDecor(game.plan)).map((o) => ({ ...o, id: uid() }))
-    for (const u of usableDecor(game.plan)) if (!game.decor.some((o) => o.type === u.type)) game.decor.push({ ...u, id: uid() })
+    game.register = game.plan.built === false ? null : (d.register || defaultRegister(game.plan))
+    game.decor = game.plan.built === false ? [] : (d.decor || defaultDecor(game.plan)).map((o) => ({ ...o, id: uid() }))
+    if (game.plan.built !== false) {
+      for (const u of usableDecor(game.plan)) if (!game.decor.some((o) => o.type === u.type)) game.decor.push({ ...u, id: uid() })
+    }
     // freezers eram decoração e agora guardam produtos; saves bem antigos nem tinham freezer salvo
     const freezers = d.decor ? game.decor.filter((o) => o.type === 'freezer') : defaultFreezers(game.plan)
     game.decor = game.decor.filter((o) => DECOR[o.type])
@@ -874,6 +1083,77 @@ export function load() {
 }
 export function wipeSave() {
   try { localStorage.removeItem(KEY) } catch (e) { /* ignore */ }
+}
+
+export function setPlayerName(raw, finalize = false) {
+  let val = String(raw ?? '').slice(0, 20)
+  if (finalize) val = val.trim() || 'Lojista'
+  if (window.__visiting) {
+    settings.playerName = val.trim() || 'Lojista'
+    return
+  }
+  game.playerName = val
+  settings.playerName = val.trim() || 'Lojista'
+  if (finalize || val.trim()) save()
+}
+
+export function setShopName(raw, finalize = false) {
+  let val = String(raw ?? '').slice(0, 24)
+  if (finalize) val = val.trim() || 'Lojinha Lofi'
+  if (window.__visiting) {
+    settings.storeName = val.trim() || 'Lojinha Lofi'
+    hooks.syncStoreName?.(settings.storeName)
+    return
+  }
+  game.shopName = val
+  settings.storeName = val.trim() || 'Lojinha Lofi'
+  if (game.branchId === 'main') game.branchName = val
+  hooks.syncStoreName?.(val.trim() || 'Lojinha Lofi')
+  hooks.syncFacadeSign?.()
+  if (finalize || val.trim()) save()
+}
+
+export function setShopStyle(patch) {
+  if (window.__visiting) return
+  game.shopStyle = { ...defaultShopStyle(), ...(game.shopStyle || {}), ...patch }
+  hooks.rebuildShop?.()
+  save()
+}
+
+export function cycleWallMode() {
+  const order = ['full', 'transparent', 'none']
+  const cur = game.shopStyle?.wallMode || 'full'
+  const next = order[(order.indexOf(cur) + 1) % order.length]
+  setShopStyle({ wallMode: next })
+}
+
+export function renameSaveSlot(sid, { playerName, shopName }) {
+  const pName = String(playerName ?? '').trim().slice(0, 20) || 'Lojista'
+  const sName = String(shopName ?? '').trim().slice(0, 24) || 'Lojinha Lofi'
+  if (sid === getActiveSaveId() && !window.__visiting) {
+    setPlayerName(pName, true)
+    setShopName(sName, true)
+    return true
+  }
+  try {
+    const raw = localStorage.getItem(slotKey(sid))
+    if (raw) {
+      const data = JSON.parse(raw)
+      data.playerName = pName
+      data.shopName = sName
+      if (data.branchId === 'main' || !data.branchId) data.branchName = sName
+      localStorage.setItem(slotKey(sid), JSON.stringify(data))
+    }
+    const list = readSavesIndex()
+    const item = list.find((x) => x.id === sid)
+    if (item) {
+      item.playerName = pName
+      item.shopName = sName
+      item.updatedAt = Date.now()
+      writeSavesIndex(list)
+    }
+    return true
+  } catch (e) { return false }
 }
 
 export function createNewSave({ playerName, shopName, mode }) {

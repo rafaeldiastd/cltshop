@@ -1,8 +1,8 @@
 <script setup>
 import { onMounted, ref } from 'vue'
-import { PhCopy, PhGlobe, PhSignIn, PhStorefront, PhUsersThree, PhCheck, PhArrowClockwise } from '@phosphor-icons/vue'
+import { PhCopy, PhGlobe, PhSignIn, PhStorefront, PhUsersThree, PhCheck, PhArrowClockwise, PhClockCounterClockwise } from '@phosphor-icons/vue'
 import Modal from './Modal.vue'
-import { ui, regionOf, toast } from '../game/state.js'
+import { game, ui, regionOf, toast, setPlayerName, setShopName } from '../game/state.js'
 import { mp, toggleOpenToVisitors, visitStore, fetchDirectoryStores } from '../game/multiplayer.js'
 import { LEVELS } from '../game/config.js'
 
@@ -33,8 +33,26 @@ function goVisit() {
       <section class="card-in">
         <div class="row">
           <div class="col">
+            <label class="muted small" for="mp-player">Seu nome</label>
+            <input
+              id="mp-player"
+              :value="game.playerName"
+              maxlength="20"
+              placeholder="Lojista"
+              @input="setPlayerName($event.target.value, false)"
+              @blur="setPlayerName($event.target.value, true)"
+            />
+          </div>
+          <div class="col">
             <label class="muted small" for="mp-name">Nome da sua loja</label>
-            <input id="mp-name" v-model="mp.storeName" maxlength="24" placeholder="Lojinha Lofi" />
+            <input
+              id="mp-name"
+              :value="mp.storeName"
+              maxlength="24"
+              placeholder="Lojinha Lofi"
+              @input="setShopName($event.target.value, false)"
+              @blur="setShopName($event.target.value, true)"
+            />
           </div>
           <div class="code-box">
             <span class="muted small">Código da sua loja</span>
@@ -67,7 +85,7 @@ function goVisit() {
       <section>
         <div class="list-head">
           <h3><PhStorefront weight="duotone" /> Lojas disponíveis ({{ mp.onlineStores.length }})</h3>
-          <button class="btn sm" @click="fetchDirectoryStores"><PhArrowClockwise weight="bold" /> Atualizar</button>
+          <button class="btn sm" @click="fetchDirectoryStores"><PhArrowClockwise weight="bold" /> 🎲 Sortear / Atualizar</button>
         </div>
         <div v-if="mp.onlineStores.length" class="stores">
           <article v-for="s in mp.onlineStores" :key="s.code" class="store-card">
@@ -86,6 +104,27 @@ function goVisit() {
         <div class="visitors">
           <span v-for="v in mp.visitors" :key="v.id" class="v-chip">👤 {{ v.name }}</span>
         </div>
+      </section>
+
+      <section v-if="!mp.visiting">
+        <h3><PhClockCounterClockwise weight="duotone" /> Registro de Ações na Sua Loja</h3>
+        <div v-if="game.visitorLog && game.visitorLog.length" class="vlog-list">
+          <div v-for="item in game.visitorLog" :key="item.id" class="vlog-row" :class="item.kind">
+            <span class="vlog-ico">{{ item.emoji }}</span>
+            <div class="vlog-body">
+              <div class="vlog-text">{{ item.text }}</div>
+              <div class="vlog-meta muted small">Dia {{ item.day }} · {{ item.time }} · por <b>{{ item.actorName }}</b></div>
+            </div>
+            <button
+              v-if="item.storeCode && item.storeCode !== mp.myCode"
+              class="btn good sm"
+              @click="visitStore(item.storeCode)"
+            >
+              Visitar
+            </button>
+          </div>
+        </div>
+        <p v-else class="muted small">Quando alguém visitar sua loja, mandar gorjeta, jogar fliperama ou aprontar uma bagunça, o registro aparecerá aqui.</p>
       </section>
     </div>
 
@@ -115,4 +154,13 @@ h3 { margin: 4px 0 6px; font-size: 1em; display: flex; align-items: center; gap:
 .v-chip { background: #e0f2fe; color: #075985; padding: 4px 10px; border-radius: 99px; font-weight: 700; font-size: 13px; }
 .list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .live-dot { color: #16a34a; font-size: 10px; }
+.vlog-list { display: flex; flex-direction: column; gap: 6px; max-height: 210px; overflow-y: auto; }
+.vlog-row { display: flex; align-items: center; gap: 8px; background: #fff; padding: 7px 10px; border-radius: 10px; border: 1.5px solid var(--cream2); }
+.vlog-row.bad { background: #fef2f2; border-color: #fecaca; }
+.vlog-row.warn { background: #fffbeb; border-color: #fde68a; }
+.vlog-row.good { background: #f0fdf4; border-color: #bbf7d0; }
+.vlog-ico { font-size: 18px; flex: none; }
+.vlog-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.vlog-text { font-size: 12.5px; font-weight: 700; line-height: 1.25; }
+.vlog-meta { font-size: 11px; }
 </style>

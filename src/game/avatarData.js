@@ -11,6 +11,21 @@ export const AVATAR_PARTS = [
   ...'abcdefg'.split('').map((l) => `male-${l}`),
   'worker', 'alien', 'knight', 'raider', 'robot', 'soldier', 'zombie',
 ]
+export const AVATAR_UNLOCK_LEVEL = {
+  employee: 0, 'female-a': 0, 'female-b': 0, 'male-a': 0, 'male-b': 0,
+  'female-c': 1, 'male-c': 1, worker: 1,
+  'female-d': 2, 'male-d': 2,
+  'female-e': 3, 'male-e': 3,
+  'female-f': 4, 'male-f': 4, 'male-g': 4,
+  knight: 5,
+  raider: 7,
+  soldier: 9,
+  robot: 12,
+  zombie: 15,
+  alien: 18,
+}
+export const avatarUnlockLevel = (id) => AVATAR_UNLOCK_LEVEL[id] ?? 0
+export const isAvatarUnlocked = (id, level = 0) => level >= avatarUnlockLevel(id)
 export const partUrl = (id) => (id === 'employee' ? 'shop/character-employee.glb' : `characters/character-${id}.glb`)
 
 export const defaultAvatar = (id = 'employee') => ({
@@ -51,10 +66,11 @@ export const FACES = [
 
 const pick = (list) => list[Math.floor(Math.random() * list.length)]
 // personagem sorteado (só gente: os especiais, como robô e alienígena, ficam para quem escolher)
-export function randomAvatar() {
-  const people = AVATAR_PARTS.filter((p) => /male|employee|worker/.test(p))
+export function randomAvatar(level = 0) {
+  const people = AVATAR_PARTS.filter((p) => /male|employee|worker/.test(p) && isAvatarUnlocked(p, level))
+  const pool = people.length ? people : ['employee']
   return {
-    head: pick(people), body: pick(people),
+    head: pick(pool), body: pick(pool),
     skin: pick(SKIN_TONES.slice(0, 4)).cell, hair: pick(PALETTE.slice(0, 9)).cell, eyes: null,
     top: pick(PALETTE).cell, bottom: pick(PALETTE).cell,
     hat: Math.random() < 0.5 ? 'none' : pick(HATS.slice(1)).id, hatColor: pick(HAT_COLORS),

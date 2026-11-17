@@ -5,6 +5,7 @@ import { game, ui, money, trashBox, storeBox, emptyCount, shelfCount, produceCou
 import { world } from '../game/world.js'
 import { PID } from '../game/config.js'
 import { sellInfo, sellHeld, rotateHeld, stopEdit, toggleProduceStyle, TOOLS, selectTool, deselectTool, heldShelf, shelfPriceOf, SHELF_TYPES, PRODUCE_TYPES, setShelfType, setProduceStyle } from '../game/editor.js'
+import { startBuild } from '../game/build.js'
 import { buildThumb } from '../game/thumbs.js'
 const shelfInHand = computed(() => heldShelf())
 const sell = computed(() => sellInfo())
@@ -96,6 +97,7 @@ const canTrash = computed(() => filled.value || emptyCount() > 1)
     </div>
 
     <div v-else class="row">
+      <button v-if="game.plan.built === false && !ui.modal" class="btn primary big" @click="startBuild"><PhWrench weight="bold" /> Construir Loja &amp; Estoque</button>
       <button v-if="ui.atRegister" class="btn primary" @click="world.leaveRegister()"><PhSignOut weight="bold" /> Sair do caixa</button>
       <button v-if="game.phase === 'lunch' && !ui.modal" class="btn primary big" @click="world.endLunch()"><PhDoorOpen weight="fill" /> Reabrir a loja (13h)</button>
       <button v-if="game.phase === 'open'" class="btn" @click="world.closeEarly()">Fechar mais cedo</button>

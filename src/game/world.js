@@ -1,9 +1,9 @@
-import { game, ui, hooks, toast, newStats, uid, wages, save, stockFull, money, settings, costOf, refOf, demandOf, rollMarket, cafePrice, cafeCost, cafeRef, customersPerDay, maxCustomers, shelfCap, hasPerk, gainXp, cafeMenu, productPrice, clockText, modeMods, regionMods, daySeconds, branchDailyProfit, stockInfo, boxCost, stockFree, pranksLeft, usePrankQuota } from './state.js'
+import { game, ui, hooks, toast, newStats, uid, wages, save, stockFull, money, settings, costOf, refOf, demandOf, rollMarket, cafePrice, cafeCost, cafeRef, customersPerDay, maxCustomers, shelfCap, hasPerk, gainXp, cafeMenu, productPrice, clockText, modeMods, regionMods, daySeconds, branchDailyProfit, stockInfo, boxCost, stockFree, pranksLeft, usePrankQuota, syncShelfBatches, addShelfBatch, consumeShelfStock, transferStockBatches, effectiveShelfPrice, logVisitorAction, mergeArcadeScores } from './state.js'
 import { PRODUCTS, PID, DAY_SECONDS, PACK, MOODS, PETS, CAMERA_STOP_CHANCE, CAFE, LUNCH, SHELF_BOOST, FENG_SHUI, ARCADE, NIGHT_LIGHTS, DELIVERY, PET, TEAM, FREEZER, TECH, DIRT, DOORMAT, DECOR, canStockProduct, shelfLifeOf, ROBBERY } from './config.js'
 import { onDuty, isOff, walkMult, workMult, serveMult, skillSpeed, energyDrain, gainMemberXp, restTeam, teamMorning, ensureCandidates } from './team.js'
 import { makeGoals, checkGoals, checkBigGoals } from './goals.js'
 import { mp, broadcastClean, broadcastPet, broadcastPrank, sendEmote } from './multiplayer.js'
-import { dims, cashierTile, queueTiles, doorTile, doorInside, shelfAccess, shelfPoint, stockStand, stockRoom, inStock, boxSlots, isUsable } from './layout.js'
+import { dims, cashierTile, queueTiles, doorTile, doorInside, shelfAccess, shelfPoint, stockStand, stockRoom, inStock, boxSlots, isUsable, isArcade } from './layout.js'
 import { sfx } from './audio.js'
 import { hoverText } from './texts.js'
 import { newNpcIdentity, npcInfo, staffInfo } from './npc.js'
@@ -113,23 +113,50 @@ class World {
       })),
     })
     hooks.syncHostEntities = (ent) => { this.remoteEntities = ent }
-    hooks.remoteClean = (x, z) => {
+    hooks.remoteClean = (x, z, fromName, fromCode) => {
       const idx = game.dirt.findIndex((d) => Math.round(d.x) === Math.round(x) && Math.round(d.z) === Math.round(z))
-      if (idx >= 0) { game.dirt.splice(idx, 1); game.today.cleaned++ }
+      if (idx >= 0) {
+        game.dirt.splice(idx, 1)
+        game.today.cleaned++
+        if (!window.__visiting && fromName) {
+          logVisitorAction({
+            actorName: fromName,
+            storeCode: fromCode,
+            emoji: '🧹',
+            text: `${fromName} limpou uma sujeira na sua loja!`,
+            kind: 'good',
+          })
+        }
+      }
     }
-    hooks.remotePet = (fromName) => {
+    hooks.remotePet = (fromName, fromCode) => {
       const pet = this.pets[0]
       if (!pet) return
       pet.happy = Math.max(pet.happy || 0, PET.pat)
       pet.say('❤️', 2.4)
       pet.setSteps([wait(0.8)])
-      if (!window.__visiting) toast(`🐾 ${fromName || 'Um visitante'} fez carinho em ${PETS[pet.species]?.name || 'seu pet'}!`, 'good')
+      if (!window.__visiting) {
+        logVisitorAction({
+          actorName: fromName,
+          storeCode: fromCode,
+          emoji: '🐾',
+          text: `${fromName || 'Visitante'} fez carinho em ${PETS[pet.species]?.name || 'seu pet'}!`,
+          kind: 'good',
+        })
+      }
     }
-    hooks.remotePrank = ({ x, z, action, newPrice, fromName }) => {
+    hooks.remotePrank = ({ x, z, action, newPrice, fromName, fromCode }) => {
+      const actor = fromName || 'Visitante'
       if (action === 'pee') {
-        game.dirt.push({ id: uid(), x, z, type: 'pee', level: 2, ox: 0, oz: 0, rot: 0, res: null })
+        game.dirt.push({ id: uid(), x, z, type: 'pee', level: 2, ox: 0, oz: 0, rot: 0, res: null, prankedBy: actor })
         if (!window.__visiting) {
-          toast(`🚽 ${fromName || 'Visitante'} mijou no chão da sua loja!`, 'bad')
+          logVisitorAction({
+            actorName: actor,
+            storeCode: fromCode,
+            emoji: '🚽',
+            text: `${actor} mijou no chão da sua loja!`,
+            kind: 'bad',
+          })
           sfx('bad')
         }
         return
@@ -139,35 +166,80 @@ class World {
       const pName = PID[s.product]?.name || 'produto'
       if (action === 'swap_price' || action === 'unprice') {
         s.price = newPrice != null ? newPrice : 0
+        s.prankedBy = actor
         if (!window.__visiting) {
-          toast(`😈 ${fromName || 'Visitante'} bagunçou o preço de ${pName} para ${money(s.price)}!`, 'bad')
+          logVisitorAction({
+            actorName: actor,
+            storeCode: fromCode,
+            emoji: '🏷️',
+            text: `${actor} trocou o preço da prateleira (${pName}) para ${money(s.price)}!`,
+            kind: 'warn',
+          })
           sfx('bad')
         }
       } else if (action === 'unstock' && s.count > 0) {
-        const pid = s.product, qty = s.count, daysLeft = s.daysLeft ?? shelfLifeOf(pid)
-        s.count = 0
-        s.product = null
-        s.daysLeft = null
-        if (!window.__visiting) {
-          let rem = qty
-          for (const b of game.boxes) {
-            if (b.state === 'open' && b.product === pid && b.count < PACK) {
-              const add = Math.min(rem, PACK - b.count)
-              b.count += add
-              rem -= add
-              if (rem <= 0) break
-            }
+        const pid = s.product, qty = s.count
+        s.prankedBy = actor
+        if (window.__visiting) {
+          s.count = 0; s.product = null; s.daysLeft = null; s.batches = []
+          return
+        }
+        for (const b of game.boxes) {
+          if (s.count <= 0) break
+          if (b.state === 'open' && b.product === pid && b.count < PACK) {
+            transferStockBatches(s, b, PACK - b.count)
           }
-          while (rem > 0) {
-            const take = Math.min(rem, PACK)
-            const empty = game.boxes.find((b) => b.state === 'empty' && !b.res)
-            if (empty) Object.assign(empty, { product: pid, count: take, state: 'open', keep: false, daysLeft })
-            else if (!stockFull()) game.boxes.push({ id: uid(), product: pid, count: take, state: 'open', daysLeft })
-            else break
-            rem -= take
-          }
-          toast(`😈 ${fromName || 'Visitante'} esvaziou a prateleira de ${pName} (${qty}x de volta às caixas)!`, 'bad')
-          sfx('bad')
+        }
+        while (s.count > 0) {
+          const empty = game.boxes.find((b) => b.state === 'empty' && !b.res)
+          if (empty) {
+            Object.assign(empty, { product: pid, count: 0, state: 'open', keep: false, daysLeft: null, batches: [] })
+            transferStockBatches(s, empty, PACK)
+          } else if (!stockFull()) {
+            const nb = { id: uid(), product: pid, count: 0, state: 'open', daysLeft: null, batches: [] }
+            transferStockBatches(s, nb, PACK)
+            game.boxes.push(nb)
+          } else break
+        }
+        if (s.count <= 0) { s.product = null; s.daysLeft = null; s.batches = [] }
+        logVisitorAction({
+          actorName: actor,
+          storeCode: fromCode,
+          emoji: '📦',
+          text: `${actor} tirou ${qty}× ${pName} da prateleira e devolveu às caixas!`,
+          kind: 'warn',
+        })
+        sfx('bad')
+      }
+    }
+    hooks.remoteArcadePlay = ({ x, z, decorType, score, holder, fromCode, storeName, fee, scores }) => {
+      const d = game.decor.find((it) => (it.x === x && it.z === z) || (it.type === decorType && isArcade(it)))
+      if (!window.__visiting && fee > 0) {
+        game.money += fee
+        game.today.arcadeRevenue = (game.today.arcadeRevenue || 0) + fee
+        this.player.bubble = money(fee)
+        this.player.bubbleT = 2.6
+        sfx('coin')
+      }
+      const isRec = d ? mergeArcadeScores(d, { holder, storeName, storeCode: fromCode, score }, scores) : false
+      const machineName = DECOR[d?.type || decorType]?.name || 'fliperama'
+      if (!window.__visiting) {
+        if (isRec) {
+          logVisitorAction({
+            actorName: holder,
+            storeCode: fromCode,
+            emoji: '🏆',
+            text: `${holder} bateu o recorde do ${machineName} com ${score} pts${fee > 0 ? ` (+${money(fee)})` : ''}!`,
+            kind: 'good',
+          })
+        } else if (fee > 0 || score > 0) {
+          logVisitorAction({
+            actorName: holder,
+            storeCode: fromCode,
+            emoji: '🕹️',
+            text: `${holder} jogou no ${machineName} (${score} pts)${fee > 0 ? ` e pagou ${money(fee)}` : ''}!`,
+            kind: 'info',
+          })
         }
       }
     }
@@ -221,6 +293,7 @@ class World {
   walkable(x, z) {
     const { cols, rows, doorX } = this.d
     if (z < 0) return false
+    if (game.plan.built === false) return z <= rows + 2 && x >= -3 && x <= cols + 2
     if (z <= rows - 1) return x >= 0 && x <= cols - 1 && !this.blocked.has(key(x, z))
     if (z === rows) return x === doorX
     if (z <= rows + 2) return x >= -3 && x <= cols + 2
@@ -306,17 +379,13 @@ class World {
     if (shelf.product && shelf.product !== box.product && shelf.count > 0) return toast('Essa prateleira já tem outro produto', 'bad')
     const n = Math.min(box.count, shelfCap() - shelf.count)
     if (n <= 0) return toast('Prateleira cheia', 'bad')
-    if (shelf.product !== box.product) { shelf.product = box.product; shelf.price = game.priceMemory[box.product] ?? null }
-    const boxDays = box.daysLeft ?? shelfLifeOf(box.product)
-    if (shelf.count <= 0) shelf.daysLeft = boxDays
-    else shelf.daysLeft = Math.min(shelf.daysLeft ?? boxDays, boxDays)
-    shelf.count += n
-    box.count -= n
+    if (shelf.product !== box.product) { shelf.product = box.product; shelf.price = game.priceMemory[box.product] ?? null; shelf.batches = [] }
+    transferStockBatches(box, shelf, n)
     sfx('pop')
     who?.play?.('pick-up')
     if (box.count <= 0) {
       const autoEmpty = game.mode === 'lofi' && game.pomodoro?.autoPilot && ui.selectedBox !== box.id
-      if (who?.kind === 'player' && !autoEmpty) { box.state = 'empty'; box.product = null; box.keep = false }
+      if (who?.kind === 'player' && !autoEmpty) { box.state = 'empty'; box.product = null; box.keep = false; box.batches = []; box.daysLeft = null }
       else {
         game.boxes.splice(game.boxes.indexOf(box), 1)
         if (ui.selectedBox === box.id) ui.selectedBox = null
@@ -346,14 +415,13 @@ class World {
   // tira da prateleira o que couber numa caixa vazia
   doWithdraw(box, shelf) {
     if (!game.boxes.includes(box) || box.state !== 'empty' || !shelf.count) return
-    const n = Math.min(PACK, shelf.count)
     box.product = shelf.product
-    box.count = n
-    box.daysLeft = shelf.daysLeft ?? shelfLifeOf(shelf.product)
+    box.batches = []
+    box.count = 0
+    const n = transferStockBatches(shelf, box, PACK)
     box.state = 'open'
     box.keep = true // retirada de propósito: o repositor só usa se o produto acabar
-    shelf.count -= n
-    if (!shelf.count) { shelf.product = null; shelf.price = null; shelf.daysLeft = null } // esvaziada de propósito fica livre
+    if (!shelf.count) { shelf.product = null; shelf.price = null; shelf.daysLeft = null; shelf.batches = [] } // esvaziada de propósito fica livre
     sfx('pop')
     toast(`${n} ${PID[box.product].name} ${n === 1 ? 'foi' : 'foram'} para a caixa`)
   }
@@ -441,7 +509,7 @@ class World {
     if (shelves.length && Math.random() < 0.35) {
       const s = shelves[Math.floor(Math.random() * shelves.length)]
       const n = Math.min(1 + Math.floor(Math.random() * 3), shelfCap() - s.count)
-      s.count += n
+      addShelfBatch(s, n, shelfLifeOf(s.product))
       pet.say('🎁', 2.4)
       toast(`🐾 ${name} achou ${n} ${PID[s.product].name} ${n === 1 ? 'caído' : 'caídos'} no chão: de volta à prateleira!`, 'good')
     } else {
@@ -464,10 +532,21 @@ class World {
       .filter((t) => this.walkable(t.x, t.z) && this.canStep(cx, cz, t.x, t.z))
       .sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))[0]
   }
-  // computador abre a tela de gestão; rádio abre o painel de música
+  // computador abre a tela de gestão; rádio abre o painel de música; fliperama/pinball/dança abrem o painel lateral com ranking
   cmdUse(d) {
-    if (!isUsable(d)) return
-    const open = () => { if (d.type === 'computer') ui.modal = 'computer'; else ui.musicPanel = true }
+    if (!isUsable(d) && !isArcade(d)) return
+    if (window.__visiting && !isArcade(d)) return
+    const open = () => {
+      if (isArcade(d)) {
+        ui.panelArcade = d.id
+        ui.arcadeDecorId = d.id
+        ui.panelShelf = null
+        ui.panelCafe = false
+        ui.npc = null
+        ui.npcInfo = null
+      } else if (d.type === 'computer') ui.modal = 'computer'
+      else ui.musicPanel = true
+    }
     const spot = this.besideTile(d.x, d.z)
     if (this.close(this.player, d.x, d.z, 1.8) || !spot) return open()
     this.cmd([go(spot.x, spot.z), call(open)])
@@ -544,6 +623,7 @@ class World {
         shelf.count = 0
         shelf.product = null
         shelf.daysLeft = null
+        shelf.batches = []
         toast(`📦 Você esvaziou a prateleira de ${pName}! (${pranksLeft()}/3 restantes hoje)`, 'good')
         broadcastPrank({ x: shelf.x, z: shelf.z, action: 'unstock' })
       }
@@ -559,18 +639,19 @@ class World {
       for (const s of game.shelves) if (s.product) cands.push({ kind: 'shelf', id: s.id, ...shelfPoint(s) })
       for (const a of this.pets) cands.push({ kind: 'pet', id: a.id, x: a.x, z: a.z })
       for (const d of game.dirt) cands.push({ kind: 'dirt', id: d.id, x: d.x + d.ox, z: d.z + d.oz })
+      for (const d of game.decor) if (isArcade(d)) cands.push({ kind: 'decor', id: d.id, x: d.x, z: d.z })
     } else {
       const carrying = game.boxes.find((b) => b.id === ui.selectedBox)
       const slots = boxSlots(game.boxes, game.plan)
       if (!carrying) for (const b of game.boxes) { const q = slots.get(b.id); cands.push({ kind: 'box', id: b.id, x: q.x + 0.3, z: q.z + 0.3 }) }
       else for (const b of game.boxes) if ((b.state === 'open' || b.state === 'empty') && b.id !== carrying.id) { const q = slots.get(b.id); cands.push({ kind: 'box', id: b.id, x: q.x + 0.3, z: q.z + 0.3 }) }
       for (const s of game.shelves) cands.push({ kind: 'shelf', id: s.id, ...shelfPoint(s) })
-      cands.push({ kind: 'counter', id: 'c', x: game.register.x, z: game.register.z })
-      if (game.phase === 'prep' || game.phase === 'lunch') { const di = doorInside(game.plan); cands.push({ kind: 'door', id: 'door', x: di.x, z: di.z + 0.6 }) }
+      if (game.register) cands.push({ kind: 'counter', id: 'c', x: game.register.x, z: game.register.z })
+      if (game.plan.built !== false && (game.phase === 'prep' || game.phase === 'lunch')) { const di = doorInside(game.plan); cands.push({ kind: 'door', id: 'door', x: di.x, z: di.z + 0.6 }) }
       for (const a of this.pets) cands.push({ kind: 'pet', id: a.id, x: a.x, z: a.z })
       for (const d of game.dirt) cands.push({ kind: 'dirt', id: d.id, x: d.x + d.ox, z: d.z + d.oz })
       if (game.cafe) cands.push({ kind: 'cafe', id: game.cafe.id, x: game.cafe.x, z: game.cafe.z })
-      for (const d of game.decor) if (isUsable(d)) cands.push({ kind: 'decor', id: d.id, x: d.x, z: d.z })
+      for (const d of game.decor) if (isUsable(d) || isArcade(d)) cands.push({ kind: 'decor', id: d.id, x: d.x, z: d.z })
     }
     let best = null, bs = 1e9
     const fx = Math.sin(p.face), fz = Math.cos(p.face)
@@ -592,6 +673,10 @@ class World {
       if (t.kind === 'dirt') { this.cmdClean(game.dirt.find((x) => x.id === t.id)); return true }
       if (t.kind === 'pet') { this.cmdVisitPet(); return true }
       if (t.kind === 'shelf') { this.cmdPrankShelf(game.shelves.find((x) => x.id === t.id)); return true }
+      if (t.kind === 'decor') {
+        const d = game.decor.find((x) => x.id === t.id)
+        if (d && isArcade(d)) { this.cmdUse(d); return true }
+      }
       return false
     }
     const p = this.player
@@ -620,6 +705,7 @@ class World {
   // ---------- fluxo do dia ----------
   openShop() {
     if (game.phase !== 'prep') return
+    if (game.plan.built === false) return toast('🏗️ Construa sua loja e seu estoque antes de abrir!', 'bad')
     game.phase = 'open'
     game.clock = 0
     this.spawnAcc = 0
@@ -638,29 +724,41 @@ class World {
     for (let i = game.boxes.length - 1; i >= 0; i--) {
       const b = game.boxes[i]
       if (b.state === 'empty' || !b.product || b.count <= 0) continue
-      b.daysLeft = (b.daysLeft ?? shelfLifeOf(b.product)) - 1
-      if (b.daysLeft <= 0) {
-        boxSpoiled += b.count
-        game.today.expired += b.count
-        game.today.expiredValue += b.count * costOf(b.product)
-        game.boxes.splice(i, 1)
+      syncShelfBatches(b)
+      for (const bt of b.batches) bt.daysLeft--
+      const expQty = b.batches.filter((bt) => bt.daysLeft <= 0).reduce((sum, bt) => sum + bt.count, 0)
+      if (expQty > 0) {
+        boxSpoiled += expQty
+        game.today.expired += expQty
+        game.today.expiredValue += expQty * costOf(b.product)
+        b.batches = b.batches.filter((bt) => bt.daysLeft > 0)
+        syncShelfBatches(b)
+        if (b.count <= 0) game.boxes.splice(i, 1)
+      } else {
+        syncShelfBatches(b)
       }
     }
     const hasStocker = game.team.some((m) => m.role === 'stocker')
     for (const s of game.shelves) {
-      if (!s.product || s.count <= 0) { s.daysLeft = null; continue }
-      s.daysLeft = (s.daysLeft ?? shelfLifeOf(s.product)) - 1
-      if (s.daysLeft <= 0) {
+      if (!s.product || s.count <= 0) { s.daysLeft = null; s.batches = []; continue }
+      syncShelfBatches(s)
+      for (const bt of s.batches) bt.daysLeft--
+      const expQty = s.batches.filter((bt) => bt.daysLeft <= 0).reduce((sum, bt) => sum + bt.count, 0)
+      if (expQty > 0) {
         if (hasStocker) {
-          shelfAutoDiscarded += s.count
-          game.today.expired += s.count
-          game.today.expiredValue += s.count * costOf(s.product)
-          s.count = 0; s.daysLeft = null; s.product = null; s.price = null
+          shelfAutoDiscarded += expQty
+          game.today.expired += expQty
+          game.today.expiredValue += expQty * costOf(s.product)
+          s.batches = s.batches.filter((bt) => bt.daysLeft > 0)
+          syncShelfBatches(s)
+          if (s.count <= 0) { s.product = null; s.price = null }
         } else {
+          syncShelfBatches(s)
           shelfExpiredLeft++
         }
-      } else if (s.daysLeft === 1) {
-        expiringSoon++
+      } else {
+        syncShelfBatches(s)
+        if (s.daysLeft === 1) expiringSoon++
       }
     }
     if (boxSpoiled) toast(`🗑️ ${boxSpoiled} unidades no estoque venceram e foram descartadas`, 'bad')
@@ -726,6 +824,7 @@ class World {
     game.phase = 'prep'
     game.clock = 0
     game.today = newStats()
+    game.dayUnlocked = { ...game.unlocked }
     let n = 0
     for (const o of game.pending) for (let i = 0; i < o.boxes; i++, n++) game.boxes.push({ id: uid(), product: o.product, count: o.size || PACK, state: 'dock', res: null, daysLeft: shelfLifeOf(o.product) })
     game.pending = []
@@ -742,7 +841,7 @@ class World {
   spawnRate() {
     const h = this.hour
     const curve = h < 11 ? 0.8 : h < 14 ? 1.3 : h < 17 ? 0.8 : h < 20 ? 1.5 : 0.7
-    const stocked = new Set(game.shelves.filter((s) => s.count > 0 && s.price != null).map((s) => s.product)).size
+    const stocked = new Set(game.shelves.filter((s) => s.count > 0 && effectiveShelfPrice(s) != null).map((s) => s.product)).size
     const variety = Math.max(0.35, Math.min(1.5, 0.35 + 0.16 * stocked))
     const rep = 0.5 + game.rep * 0.17
     let lightsMult = 1
@@ -758,7 +857,7 @@ class World {
     const left = Math.random() < 0.5
     const mm = modeMods(), rm = regionMods()
     const c = new Actor({ id: 'c' + uid(), kind: 'customer', ...newNpcIdentity(), x: left ? -3 : cols + 2, z: rows + 2, speed: rnd(1.6, 2.1), basket: [], wants: [], came: [], issues: [], patience: PATIENCE * mm.patience * rm.patience, waiting: false, hue: Math.random(), felt: new Set() })
-    const pool = PRODUCTS.filter((p) => game.unlocked[p.id])
+    const pool = PRODUCTS.filter((p) => (game.dayUnlocked || game.unlocked)[p.id])
     const maxItems = hasPerk('basket2') ? 5 : hasPerk('basket1') ? 4 : 3
     const n = Math.min(pool.length, 1 + Math.floor(Math.random() * maxItems))
     const bag = [...pool]
@@ -793,7 +892,7 @@ class World {
       game.rep = Math.max(1, game.rep - DIRT.rep)
       return 'dirty'
     }
-    const found = c.wants.filter((w) => game.shelves.some((s) => s.product === w.pid && this.sellable(s) && s.price <= w.willing)).length
+    const found = c.wants.filter((w) => game.shelves.some((s) => s.product === w.pid && this.sellable(s) && effectiveShelfPrice(s) <= w.willing)).length
     if (!found) return 'empty'
     if (found < c.wants.length) return 'meh'
     const fill = game.shelves.reduce((n, s) => n + s.count, 0) / Math.max(1, game.shelves.length * shelfCap())
@@ -835,7 +934,7 @@ class World {
     // quem viria entre 12h e 13h encontrou a porta fechada
     const expected = this.spawnRate() * (LUNCH.end - LUNCH.start)
     const missed = Math.floor(expected) + (Math.random() < expected % 1 ? 1 : 0)
-    const pool = PRODUCTS.filter((p) => game.unlocked[p.id])
+    const pool = PRODUCTS.filter((p) => (game.dayUnlocked || game.unlocked)[p.id])
     const ticket = pool.reduce((s, p) => s + refOf(p.id), 0) / Math.max(1, pool.length)
     const t = game.today
     t.lunchMissed += missed
@@ -854,7 +953,7 @@ class World {
     if (game.phase === 'closing' || !c.wants.length) return this.checkout(c)
     const w = c.wants.shift()
     const p = PID[w.pid]
-    const avail = game.shelves.filter((s) => s.product === w.pid && this.sellable(s)).sort((a, b) => a.price - b.price)
+    const avail = game.shelves.filter((s) => s.product === w.pid && this.sellable(s)).sort((a, b) => (effectiveShelfPrice(a) ?? 999) - (effectiveShelfPrice(b) ?? 999))
     if (!avail.length) {
       game.today.oos[w.pid] = (game.today.oos[w.pid] || 0) + w.qty
       game.today.lostValue += w.qty * refOf(w.pid)
@@ -870,6 +969,7 @@ class World {
     const p = PID[w.pid]
     const bInfo = SHELF_BOOST[shelf.boost || 0] || SHELF_BOOST[0]
     const maxPay = w.willing * (bInfo.willing || 1)
+    const unitPrice = effectiveShelfPrice(shelf)
     if (shelf.count <= 0 || shelf.product !== w.pid || shelf.broken) {
       game.today.oos[w.pid] = (game.today.oos[w.pid] || 0) + w.qty
       game.today.lostValue += w.qty * refOf(w.pid)
@@ -888,18 +988,17 @@ class World {
         sfx('alarm')
         toast('🚨 Fiscalização Sanitária: multa de R$ 80 por produto vencido na prateleira!', 'bad')
       }
-    } else if (shelf.price > maxPay) {
+    } else if (unitPrice > maxPay) {
       game.today.price[w.pid] = (game.today.price[w.pid] || 0) + w.qty
       game.today.lostValue += w.qty * refOf(w.pid)
-      c.issues.push({ kind: 'pricey', pid: w.pid, price: shelf.price, willing: maxPay })
+      c.issues.push({ kind: 'pricey', pid: w.pid, price: unitPrice, willing: maxPay })
       this.feel(c, 'pricey'); game.rep = Math.max(1, game.rep - 0.01)
     } else {
       let q = w.qty
-      if (shelf.price < refOf(w.pid) * 0.9 && Math.random() < 0.6) q++
-      q = Math.min(q, shelf.count)
-      shelf.count -= q
+      if (unitPrice < refOf(w.pid) * 0.9 && Math.random() < 0.6) q++
+      q = consumeShelfStock(shelf, Math.min(q, shelf.count))
       this.useFreezer(shelf, q)
-      c.basket.push({ pid: w.pid, qty: q, price: shelf.price })
+      c.basket.push({ pid: w.pid, qty: q, price: unitPrice })
       this.feel(c, 'bought', 1.2); sfx('pop')
       this.maybeDirt(c, 'spill')
       this.checkImpulse(c, shelf)
@@ -911,10 +1010,11 @@ class World {
     for (const ns of nearby) {
       const bInfo = SHELF_BOOST[ns.boost]
       if (Math.random() < (bInfo.impulse || 0) && !c.basket.some((b) => b.pid === ns.product)) {
-        const takeQty = 1
-        ns.count -= takeQty
+        const nsPrice = effectiveShelfPrice(ns)
+        const takeQty = consumeShelfStock(ns, 1)
+        if (!takeQty) continue
         this.useFreezer(ns, takeQty)
-        c.basket.push({ pid: ns.product, qty: takeQty, price: ns.price })
+        c.basket.push({ pid: ns.product, qty: takeQty, price: nsPrice })
         game.today.impulse = (game.today.impulse || 0) + 1
         this.feel(c, 'impulse', 1.5)
         sfx('pop')
@@ -1258,7 +1358,7 @@ class World {
   }
 
   // ---------- freezers: o motor gasta com o uso; quebrado, não vende e os gelados estragam ----------
-  sellable(s) { return s.count > 0 && s.price != null && !s.broken }
+  sellable(s) { return s.count > 0 && effectiveShelfPrice(s) != null && !s.broken }
   useFreezer(s, units) { if (s.fridge && !s.broken) s.wear = Math.min(100, (s.wear || 0) + units * FREEZER.wearPerUnit * modeMods().freezerWear * regionMods().freezerWear) }
   updateFreezers(dt) {
     const hot = (game.weather === 'hot' ? FREEZER.hot : 1) * modeMods().freezerWear * regionMods().freezerWear
@@ -1460,8 +1560,7 @@ class World {
             for (const it of waitingOrder.items) {
               let need = it.qty
               for (const s of game.shelves.filter((s) => s.product === it.pid && !s.broken)) {
-                const take = Math.min(need, s.count)
-                s.count -= take
+                const take = consumeShelfStock(s, Math.min(need, s.count))
                 this.useFreezer(s, take)
                 need -= take
                 if (need <= 0) break
@@ -1704,7 +1803,17 @@ class World {
     if (ui.atRegister !== this.player.cashiering) ui.atRegister = this.player.cashiering
     // com a loja funcionando, só o botão de pausa para o jogo; telas abertas não param nada
     const live = game.phase === 'open' || game.phase === 'closing'
-    if (game.paused || (ui.modal && !live)) return
+    if (!live && game.paused) game.paused = false
+    if (game.paused || (ui.modal && !live)) {
+      if (!ui.modal) {
+        this.player.update(rawDt, this)
+        this.movePlayer(rawDt)
+        this.target = this.computeTarget()
+        const prompt = this.target ? hoverText(this.target) : null
+        if (prompt !== this._lastPrompt) { this._lastPrompt = prompt; ui.prompt = prompt }
+      }
+      return
+    }
     const dt = live ? rawDt * game.speed : rawDt
 
     this.updateDelivery(dt)

@@ -1,6 +1,6 @@
 // Multiplayer em tempo real: visitas entre lojas via Supabase (Realtime + store_directory) e canal local (BroadcastChannel + localStorage).
 import { reactive, watch } from 'vue'
-import { game, ui, settings, hooks, toast, money, save, uid, gainXp, nextTipCost, nextTipXp, MAX_TIPS, tipsLeft } from './state.js'
+import { game, ui, settings, hooks, toast, money, save, uid, gainXp, nextTipCost, nextTipXp, MAX_TIPS, tipsLeft, logVisitorAction, mergeArcadeScores, defaultShopStyle } from './state.js'
 import { sb, cloud } from './cloud.js'
 import { doorTile } from './layout.js'
 import { sfx } from './audio.js'
@@ -101,7 +101,13 @@ async function publishToSupabase(force = false) {
       game.money += tips
       game.rep = Math.min(5, game.rep + 0.05)
       sfx('coin')
-      toast(`💝 Você recebeu ${money(tips)} em gorjetas de visitantes!`, 'good')
+      logVisitorAction({
+        actorName: 'Visitante offline',
+        storeCode: '',
+        emoji: '💝',
+        text: `Você recebeu ${money(tips)} em gorjetas/fichas enquanto estava fora!`,
+        kind: 'good',
+      })
     }
   } catch (e) { /* tabela 002_multiplayer pode não estar criada ainda */ }
 }
@@ -120,7 +126,7 @@ export async function fetchDirectoryStores() {
         .eq('open_to_visitors', true)
         .neq('code', mp.myCode)
         .order('updated_at', { ascending: false })
-        .limit(20)
+        .limit(40)
       if (Array.isArray(data)) {
         mp.supaConnected = true
         for (const r of data) {
@@ -138,14 +144,44 @@ export async function fetchDirectoryStores() {
       }
     } catch (e) { /* ignore */ }
   }
-  refreshOnlineList()
+  refreshOnlineList(true)
 }
 
-function refreshOnlineList() {
+function sampleStores(arr, n) {
+  const copy = [...arr]
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy.slice(0, n)
+}
+
+function refreshOnlineList(reshuffle = false) {
   const merged = new Map()
   for (const [code, s] of dirLobby) if (code && code !== mp.myCode) merged.set(code, s)
   for (const s of supaLobby) if (s.code && s.code !== mp.myCode) merged.set(s.code, { ...merged.get(s.code), ...s, live: true })
-  mp.onlineStores = [...merged.values()]
+  if (merged.size <= 10) {
+    mp.onlineStores = [...merged.values()]
+    return
+  }
+  if (reshuffle || !mp.onlineStores.length) {
+    mp.onlineStores = sampleStores([...merged.values()], 10)
+    return
+  }
+  const kept = []
+  const usedCodes = new Set()
+  for (const old of mp.onlineStores) {
+    const fresh = merged.get(old.code)
+    if (fresh && kept.length < 10) {
+      kept.push(fresh)
+      usedCodes.add(fresh.code)
+    }
+  }
+  if (kept.length < 10) {
+    const rest = [...merged.values()].filter((s) => !usedCodes.has(s.code))
+    kept.push(...sampleStores(rest, 10 - kept.length))
+  }
+  mp.onlineStores = kept
 }
 
 function sendLobbyMsg(payload) {
@@ -165,6 +201,8 @@ function buildStoreSnapshot() {
   const pl = hooks.getPlayerState?.() || { x: 4, z: 4, face: 0, moving: false, emote: null, anim: null }
   return {
     branchName: mp.storeName || game.branchName,
+    shopName: game.shopName || mp.storeName || game.branchName,
+    shopStyle: snap(game.shopStyle || defaultShopStyle()),
     region: game.region,
     level: game.level,
     plan: snap(game.plan),
@@ -236,6 +274,8 @@ function beginVisitSession(code, st) {
   ui.modal = null
   ui.panelShelf = null
   ui.panelCafe = false
+  ui.panelArcade = null
+  ui.arcadeDecorId = null
   ui.npc = null
   ui.selectedBox = null
   applyVisitedState(st, true)
@@ -251,6 +291,8 @@ function applyVisitedState(st, isInitial = false) {
   if (isInitial) {
     Object.assign(game, {
       branchName: st.branchName || 'Loja Visitada',
+      shopName: st.shopName || st.branchName || 'Loja Visitada',
+      shopStyle: st.shopStyle || defaultShopStyle(),
       region: st.region || 'residencial',
       level: st.level || 0,
       plan: st.plan,
@@ -288,6 +330,12 @@ function applyVisitedState(st, isInitial = false) {
         Object.assign(game.shelves[i], { product: ns.product, count: ns.count, price: ns.price, broken: ns.broken })
       })
     }
+    if (Array.isArray(st.decor) && st.decor.length === game.decor.length) {
+      st.decor.forEach((nd, i) => {
+        if (nd.highScore) game.decor[i].highScore = nd.highScore
+        if (Array.isArray(nd.scores)) game.decor[i].scores = nd.scores
+      })
+    }
   }
   if (st.entities) hooks.syncHostEntities?.(st.entities)
 }
@@ -299,7 +347,13 @@ function handleRoomMsg(msg) {
     upsertVisitor({ id: msg.sender, name: msg.name, avatar: msg.avatar, x: msg.x, z: msg.z })
     sendRoomMsg({ type: 'store_state', to: msg.sender, initial: true, state: buildStoreSnapshot() })
     if (isNew) {
-      toast(`👋 ${msg.name || 'Alguém'} entrou para visitar sua loja!`, 'good')
+      logVisitorAction({
+        actorName: msg.name,
+        storeCode: msg.fromCode,
+        emoji: '👋',
+        text: `${msg.name || 'Alguém'}${msg.storeName ? ` (${msg.storeName})` : ''} entrou para visitar sua loja!`,
+        kind: 'good',
+      })
       sfx('chime')
     }
     return
@@ -338,19 +392,29 @@ function handleRoomMsg(msg) {
     game.rep = Math.min(5, game.rep + 0.05)
     hooks.showBubble?.(money(amt), '💝')
     sfx('coin')
-    toast(`💝 ${msg.fromName || 'Visitante'} deu uma gorjeta de ${money(amt)}${xp > 0 ? ` (+${xp} XP)` : ''}!`, 'good')
+    logVisitorAction({
+      actorName: msg.fromName,
+      storeCode: msg.fromCode,
+      emoji: '💝',
+      text: `${msg.fromName || 'Visitante'} deu uma gorjeta de ${money(amt)}${xp > 0 ? ` (+${xp} XP)` : ''}!`,
+      kind: 'good',
+    })
     return
   }
   if (msg.type === 'clean') {
-    hooks.remoteClean?.(msg.x, msg.z)
+    hooks.remoteClean?.(msg.x, msg.z, msg.fromName, msg.fromCode)
     return
   }
   if (msg.type === 'pet') {
-    hooks.remotePet?.(msg.fromName)
+    hooks.remotePet?.(msg.fromName, msg.fromCode)
     return
   }
   if (msg.type === 'prank') {
     hooks.remotePrank?.(msg)
+    return
+  }
+  if (msg.type === 'arcade_play') {
+    hooks.remoteArcadePlay?.(msg)
     return
   }
   if (msg.type === 'chat') {
@@ -554,7 +618,7 @@ export async function visitStore(rawCode) {
   mp.connecting = true
 
   // 1. Checa lista em memória
-  let snapshot = mp.onlineStores.find((s) => s.code === code)?.snapshot || null
+  let snapshot = dirLobby.get(code)?.snapshot || mp.onlineStores.find((s) => s.code === code)?.snapshot || null
 
   // 2. Checa Supabase (store_directory)
   if (!snapshot && sb) {
@@ -570,7 +634,15 @@ export async function visitStore(rawCode) {
 
   const sendReq = () => {
     const door = doorTile(game.plan)
-    sendRoomMsg({ type: 'req_state', name: displayUser(), avatar: settings.avatar, x: door.x, z: door.z })
+    sendRoomMsg({
+      type: 'req_state',
+      name: displayUser(),
+      fromCode: mp.myCode,
+      storeName: mp.storeName || savedHomeState?.game?.shopName || '',
+      avatar: settings.avatar,
+      x: door.x,
+      z: door.z,
+    })
   }
 
   if (snapshot) {
@@ -612,6 +684,9 @@ export function leaveVisit() {
   mp.visitors = []
   hostAlive = false
   window.__visiting = false
+  ui.panelArcade = null
+  ui.arcadeDecorId = null
+  if (ui.modal === 'arcade') ui.modal = null
   if (savedHomeState) {
     const home = savedHomeState.game
     const pos = savedHomeState.playerPos
@@ -652,7 +727,7 @@ export async function sendTip() {
   sfx('coin')
 
   if (hostAlive) {
-    sendRoomMsg({ type: 'tip', fromName: displayUser(), amount, xp })
+    sendRoomMsg({ type: 'tip', fromName: displayUser(), fromCode: mp.myCode, amount, xp })
   } else if (sb) {
     try { await sb.rpc('send_store_tip', { p_code: code, p_amount: amount }) } catch (e) { /* ignore */ }
   }
@@ -660,15 +735,15 @@ export async function sendTip() {
 }
 
 export function broadcastClean(x, z) {
-  if (mp.visiting || mp.visitors.length) sendRoomMsg({ type: 'clean', x, z })
+  if (mp.visiting || mp.visitors.length) sendRoomMsg({ type: 'clean', x, z, fromName: displayUser(), fromCode: mp.myCode })
 }
 
 export function broadcastPet() {
-  if (mp.visiting || mp.visitors.length) sendRoomMsg({ type: 'pet', fromName: displayUser() })
+  if (mp.visiting || mp.visitors.length) sendRoomMsg({ type: 'pet', fromName: displayUser(), fromCode: mp.myCode })
 }
 
 export function broadcastPrank(payload) {
-  if (mp.visiting || mp.visitors.length) sendRoomMsg({ type: 'prank', fromName: displayUser(), ...payload })
+  if (mp.visiting || mp.visitors.length) sendRoomMsg({ type: 'prank', fromName: displayUser(), fromCode: mp.myCode, ...payload })
 }
 
 export function sendChat(rawText) {
@@ -684,4 +759,57 @@ export function sendChat(rawText) {
     sendRoomMsg({ type: 'chat', id: entry.id, fromName, text })
   }
   return true
+}
+
+export function payArcadeFee(cost = 5) {
+  if (!mp.visiting) return true
+  if (game.money < cost) {
+    toast(`Saldo insuficiente para jogar (${money(cost)})`, 'bad')
+    return false
+  }
+  game.money -= cost
+  if (savedHomeState) savedHomeState.game.money = game.money
+  hooks.showBubble?.('-' + money(cost), '🕹️')
+  sfx('coin')
+  return true
+}
+
+export async function finishArcadePlay(decor, score) {
+  if (!decor) return { newRecord: false, holder: displayUser() }
+  const holder = displayUser()
+  const storeName = mp.storeName || savedHomeState?.game?.shopName || game.shopName || ''
+  const newRecord = mergeArcadeScores(decor, {
+    holder,
+    storeName,
+    storeCode: mp.myCode || '',
+    score,
+  })
+  if (newRecord) {
+    gainXp(8)
+    if (savedHomeState) savedHomeState.game.career = snap(game.career)
+  }
+  const fee = mp.visiting ? 5 : 0
+  if (mp.visiting || mp.visitors.length) {
+    sendRoomMsg({
+      type: 'arcade_play',
+      x: decor.x,
+      z: decor.z,
+      decorType: decor.type,
+      score,
+      holder,
+      fromCode: mp.myCode,
+      storeName,
+      fee,
+      newRecord,
+      scores: decor.scores,
+    })
+  }
+  if (mp.visiting && !hostAlive && sb && fee > 0) {
+    try { await sb.rpc('send_store_tip', { p_code: mp.visiting.code, p_amount: fee }) } catch (e) { /* ignore */ }
+  }
+  if (!mp.visiting) {
+    save()
+    publishToSupabase(true)
+  }
+  return { newRecord, holder }
 }

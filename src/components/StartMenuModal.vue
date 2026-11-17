@@ -1,10 +1,10 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { PhArrowCounterClockwise, PhGameController, PhLock, PhPlay, PhPlus, PhStorefront, PhTrash, PhUser } from '@phosphor-icons/vue'
+import { PhArrowCounterClockwise, PhCheck, PhGameController, PhLock, PhPencilSimple, PhPlay, PhPlus, PhStorefront, PhTrash, PhUser, PhX } from '@phosphor-icons/vue'
 import Modal from './Modal.vue'
 import {
   game, ui, settings, savesList, refreshSavesList, getActiveSaveId,
-  createNewSave, loadSaveSlot, restartSaveSlot, deleteSaveSlot, money, regionOf,
+  createNewSave, loadSaveSlot, restartSaveSlot, deleteSaveSlot, renameSaveSlot, money, regionOf,
 } from '../game/state.js'
 import { GAME_MODES } from '../game/config.js'
 
@@ -13,6 +13,20 @@ const playerName = ref(settings.playerName || game.playerName || 'Lojista')
 const shopName = ref('')
 const selectedMode = ref('normal')
 const activeId = computed(() => getActiveSaveId())
+const editingId = ref(null)
+const editPlayer = ref('')
+const editShop = ref('')
+
+function startRename(s) {
+  editingId.value = s.id
+  editPlayer.value = s.playerName || 'Lojista'
+  editShop.value = s.shopName || 'Lojinha Lofi'
+}
+
+function saveRename(sid) {
+  renameSaveSlot(sid, { playerName: editPlayer.value, shopName: editShop.value })
+  editingId.value = null
+}
 
 onMounted(() => {
   refreshSavesList()
@@ -52,33 +66,54 @@ const modeInfo = (id) => GAME_MODES[id] || GAME_MODES.normal
       <p class="muted intro">Escolha uma loja salva para continuar, recomece do Dia 1 ou crie uma nova partida em outro modo de jogo.</p>
       <div class="saves-list">
         <div v-for="s in savesList" :key="s.id" class="save-card" :class="{ active: s.id === activeId }">
-          <div class="save-main">
-            <div class="save-title">
-              <PhStorefront weight="duotone" />
-              <b>{{ s.shopName || 'Lojinha Lofi' }}</b>
-              <span v-if="s.id === activeId" class="badge active">Atual</span>
-              <span class="badge lock" :class="s.mode">
-                <PhLock weight="bold" /> {{ modeInfo(s.mode).emoji }} {{ modeInfo(s.mode).name }}
-              </span>
+          <template v-if="editingId === s.id">
+            <div class="edit-row">
+              <label class="field mini">
+                <span>Personagem</span>
+                <input v-model="editPlayer" maxlength="20" placeholder="Lojista" />
+              </label>
+              <label class="field mini">
+                <span>Lojinha</span>
+                <input v-model="editShop" maxlength="24" placeholder="Lojinha Lofi" @keyup.enter="saveRename(s.id)" />
+              </label>
+              <div class="save-acts">
+                <button class="btn sm good" title="Salvar nomes" @click="saveRename(s.id)"><PhCheck weight="bold" /> Salvar</button>
+                <button class="btn sm" title="Cancelar" @click="editingId = null"><PhX weight="bold" /></button>
+              </div>
             </div>
-            <div class="save-meta muted">
-              <span><PhUser weight="bold" /> {{ s.playerName || 'Lojista' }}</span>
-              <span>· Dia {{ s.day || 1 }}</span>
-              <span>· {{ money(s.money ?? 0) }}</span>
-              <span>· {{ regionOf(s.region).emoji }} {{ regionOf(s.region).name }}</span>
+          </template>
+          <template v-else>
+            <div class="save-main">
+              <div class="save-title">
+                <PhStorefront weight="duotone" />
+                <b>{{ s.shopName || 'Lojinha Lofi' }}</b>
+                <span v-if="s.id === activeId" class="badge active">Atual</span>
+                <span class="badge lock" :class="s.mode">
+                  <PhLock weight="bold" /> {{ modeInfo(s.mode).emoji }} {{ modeInfo(s.mode).name }}
+                </span>
+              </div>
+              <div class="save-meta muted">
+                <span><PhUser weight="bold" /> {{ s.playerName || 'Lojista' }}</span>
+                <span>· Dia {{ s.day || 1 }}</span>
+                <span>· {{ money(s.money ?? 0) }}</span>
+                <span>· {{ regionOf(s.region).emoji }} {{ regionOf(s.region).name }}</span>
+              </div>
             </div>
-          </div>
-          <div class="save-acts">
-            <button class="btn sm primary" @click="playSlot(s.id)">
-              <PhPlay weight="fill" /> {{ s.id === activeId ? 'Continuar' : 'Carregar' }}
-            </button>
-            <button class="btn sm" title="Recomeçar esta partida do Dia 1" @click="restartSaveSlot(s.id)">
-              <PhArrowCounterClockwise weight="bold" />
-            </button>
-            <button class="btn sm danger" title="Apagar este save" @click="deleteSaveSlot(s.id)">
-              <PhTrash weight="bold" />
-            </button>
-          </div>
+            <div class="save-acts">
+              <button class="btn sm primary" @click="playSlot(s.id)">
+                <PhPlay weight="fill" /> {{ s.id === activeId ? 'Continuar' : 'Carregar' }}
+              </button>
+              <button class="btn sm" title="Alterar nome do personagem e da lojinha" @click="startRename(s)">
+                <PhPencilSimple weight="bold" />
+              </button>
+              <button class="btn sm" title="Recomeçar esta partida do Dia 1" @click="restartSaveSlot(s.id)">
+                <PhArrowCounterClockwise weight="bold" />
+              </button>
+              <button class="btn sm danger" title="Apagar este save" @click="deleteSaveSlot(s.id)">
+                <PhTrash weight="bold" />
+              </button>
+            </div>
+          </template>
         </div>
       </div>
     </div>
@@ -161,6 +196,9 @@ const modeInfo = (id) => GAME_MODES[id] || GAME_MODES.normal
 .field span { display: inline-flex; align-items: center; gap: 5px; }
 .field input { padding: 9px 12px; border-radius: 10px; border: 2px solid var(--cream2); background: #fff; font: inherit; font-weight: 700; color: var(--plum); }
 .field input:focus { outline: none; border-color: var(--teal); }
+.edit-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; width: 100%; }
+.field.mini { flex: 1; min-width: 140px; font-size: 12px; }
+.field.mini input { padding: 6px 10px; }
 .mode-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .warn-lock { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 800; color: #9a3412; background: #ffedd5; padding: 3px 9px; border-radius: 99px; }
 .mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }

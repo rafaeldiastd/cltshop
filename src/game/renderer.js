@@ -2,11 +2,11 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { toRaw } from 'vue'
-import { game, ui, money, settings, daySeconds, modeMods, hooks } from './state.js'
+import { game, ui, money, settings, daySeconds, modeMods, hooks, effectiveShelfPrice } from './state.js'
 import { world } from './world.js'
 import { PID, FREEZER, DECOR } from './config.js'
 import { roleName } from './people.js'
-import { dims, boxSlots, stockRoom, onFloor, isUsable, backPartner, elbowOf, DIRS, planKey } from './layout.js'
+import { dims, boxSlots, stockRoom, onFloor, isUsable, isArcade, backPartner, elbowOf, DIRS, planKey } from './layout.js'
 import { nextPlan } from './build.js'
 import * as assets from './assets.js'
 import { makeAvatar } from './avatar.js'
@@ -191,6 +191,7 @@ export class Renderer {
     this.initInput()
     this.initTags()
     hooks.rebuildShop = () => { this.builtKey = ''; this.buildShop() }
+    hooks.syncFacadeSign = () => this.updateFacadeSign()
     setThumbMaker((key) => this.makeBuildModel(key))
     addEventListener('resize', () => this.resize())
     this.resize()
@@ -300,16 +301,47 @@ export class Renderer {
     const { cols, rows, doorX } = dims(game.plan)
     this.builtKey = planKey(game.plan)
 
-    // chão com tijolinhos de madeira
-    const cv = document.createElement('canvas'); cv.width = cols * 64; cv.height = rows * 64
+    // Dia 1 sem loja construída (Normal / Hardcore): mostra apenas o terreno demarcado
+    if (game.plan.built === false) {
+      this.counterG = null
+      this.doorG = null
+      this.doorSign = null
+      this.facadeSign = null
+      this.facadeSignBack = null
+      this.regLamp = null
+      const lot = new THREE.Mesh(new THREE.PlaneGeometry(cols, rows + 0.5), std(0x9fc282, { roughness: 0.95 }))
+      lot.rotation.x = -Math.PI / 2; lot.position.set(cols / 2 - 0.5, 0.005, rows / 2 - 0.25); lot.receiveShadow = true
+      g.add(lot)
+      const bPts = []
+      for (let ix = 0; ix < cols; ix++) for (let iz = 0; iz < rows; iz++) {
+        const a = ix - 0.5, b = ix + 0.5, c = iz - 0.5, d = iz + 0.5, y = 0.02
+        bPts.push(a, y, c, b, y, c, b, y, c, b, y, d, b, y, d, a, y, d, a, y, d, a, y, c)
+      }
+      const bGeo = new THREE.BufferGeometry(); bGeo.setAttribute('position', new THREE.Float32BufferAttribute(bPts, 3))
+      g.add(new THREE.LineSegments(bGeo, new THREE.LineBasicMaterial({ color: 0x3b2f4a, transparent: true, opacity: 0.22 })))
+      for (const [sx, sz] of [[-0.5, -0.5], [cols - 0.5, -0.5], [-0.5, rows - 0.5], [cols - 0.5, rows - 0.5]]) {
+        g.add(box(0.14, 0.45, 0.14, 0xb98a5a, sx, 0.225, sz))
+      }
+      this.gridG = null
+      this.matKey = null
+      bakeChildren(g)
+      this.scenery.build({ cols, rows, doorX })
+      this.scene.add(g)
+      this.frame()
+      this.r.shadowMap.needsUpdate = true
+      return
+    }
+
+    // chão com tijolinhos de madeira (estende até a parede da frente em z = rows)
+    const cv = document.createElement('canvas'); cv.width = cols * 64; cv.height = rows * 64 + 32
     const x = cv.getContext('2d')
-    for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) for (let j = 0; j < rows + 1; j++) {
       x.fillStyle = (i + j) % 2 ? '#e6c9a0' : '#dcbb8e'; x.fillRect(i * 64, j * 64, 64, 64)
       x.strokeStyle = 'rgba(120,80,40,0.18)'; x.strokeRect(i * 64 + 1, j * 64 + 1, 62, 62)
     }
     const ft = new THREE.CanvasTexture(cv); ft.colorSpace = THREE.SRGBColorSpace; ft.anisotropy = 4
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(cols, rows), new THREE.MeshStandardMaterial({ map: ft, roughness: 0.9 }))
-    floor.rotation.x = -Math.PI / 2; floor.position.set(cols / 2 - 0.5, 0, rows / 2 - 0.5); floor.receiveShadow = true
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(cols, rows + 0.5), new THREE.MeshStandardMaterial({ map: ft, roughness: 0.9 }))
+    floor.rotation.x = -Math.PI / 2; floor.position.set(cols / 2 - 0.5, 0, rows / 2 - 0.25); floor.receiveShadow = true
     g.add(floor)
 
     // grade do modo layout
@@ -323,47 +355,146 @@ export class Renderer {
     this.gridG = new THREE.LineSegments(gridGeo, new THREE.LineBasicMaterial({ color: 0x3b2f4a, transparent: true, opacity: 0.3 }))
     this.gridG.visible = false; g.add(this.gridG)
 
-    // paredes (fundo e esquerda altas; frente e direita baixas para ver dentro)
-    const wallC = 0xf2dcc0, trim = 0xb98a5a
+    // paredes (3 modos: completas | transparentes | sem paredes; + papel de parede estilo The Sims)
+    const st = game.shopStyle || {}
+    const wallHex = st.wallColor || '#f2dcc0'
+    const trimHex = st.trimColor || '#b98a5a'
+    const pattern = st.wallPaper || 'solid'
+    const wallMode = st.wallMode || 'full'
+    const trim = new THREE.Color(trimHex).getHex()
+    const isTrans = wallMode === 'transparent'
+    const wallCache = new Map()
+    const wallBox = (w, h, d, x, y, z) => {
+      if (wallMode === 'none') return null
+      let m
+      if (pattern === 'solid') {
+        const mat = std(new THREE.Color(wallHex).getHex(), isTrans ? { transparent: true, opacity: 0.22, depthWrite: false } : {})
+        m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat)
+      } else {
+        const rw = Math.max(1, Math.round(Math.max(w, d) * 1.4))
+        const rh = Math.max(1, Math.round(h * 1.4))
+        const k = `${pattern}|${wallHex}|${rw}x${rh}|${isTrans ? 1 : 0}`
+        let mat = wallCache.get(k)
+        if (!mat) {
+          const wc = document.createElement('canvas'); wc.width = 128; wc.height = 128
+          const ctx = wc.getContext('2d')
+          ctx.fillStyle = wallHex
+          ctx.fillRect(0, 0, 128, 128)
+          if (pattern === 'stripes') {
+            ctx.fillStyle = 'rgba(255,255,255,0.22)'
+            for (let i = 0; i < 128; i += 32) ctx.fillRect(i, 0, 16, 128)
+            ctx.fillStyle = 'rgba(59,47,74,0.06)'
+            for (let i = 16; i < 128; i += 32) ctx.fillRect(i, 0, 4, 128)
+          } else if (pattern === 'brick') {
+            ctx.strokeStyle = 'rgba(59,47,74,0.18)'; ctx.lineWidth = 3
+            for (let row = 0; row < 4; row++) {
+              const yy = row * 32, off = (row % 2) * 32
+              ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(128, yy); ctx.stroke()
+              for (let col = 0; col < 2; col++) {
+                const xx = (col * 64 + off) % 128
+                ctx.beginPath(); ctx.moveTo(xx, yy); ctx.lineTo(xx, yy + 32); ctx.stroke()
+              }
+            }
+          } else if (pattern === 'tiles') {
+            ctx.fillStyle = 'rgba(255,255,255,0.28)'
+            for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) if ((r + c) % 2) ctx.fillRect(c * 32, r * 32, 32, 32)
+            ctx.strokeStyle = 'rgba(59,47,74,0.09)'; ctx.lineWidth = 2
+            for (let i = 0; i <= 128; i += 32) { ctx.strokeRect(i, 0, 0, 128); ctx.strokeRect(0, i, 128, 0) }
+          } else if (pattern === 'wood') {
+            ctx.fillStyle = 'rgba(90,55,25,0.14)'
+            for (let i = 0; i < 128; i += 16) ctx.fillRect(i, 0, 3, 128)
+            ctx.fillStyle = 'rgba(255,255,255,0.12)'
+            for (let i = 4; i < 128; i += 16) ctx.fillRect(i, 0, 2, 128)
+          } else if (pattern === 'stars') {
+            ctx.fillStyle = 'rgba(255,255,255,0.45)'
+            ctx.font = 'bold 18px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+            for (const [sx, sy] of [[24, 24], [88, 36], [52, 84], [106, 102]]) ctx.fillText('✦', sx, sy)
+          }
+          const tex = new THREE.CanvasTexture(wc)
+          tex.colorSpace = THREE.SRGBColorSpace
+          tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping
+          tex.repeat.set(rw, rh)
+          mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.86, ...(isTrans ? { transparent: true, opacity: 0.22, depthWrite: false } : {}) })
+          wallCache.set(k, mat)
+        }
+        m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat)
+      }
+      m.position.set(x, y, z); m.castShadow = !isTrans; m.receiveShadow = true
+      return m
+    }
+    const addWall = (w, h, d, x, y, z) => { const m = wallBox(w, h, d, x, y, z); if (m) g.add(m) }
 
-    // sala do estoque: piso próprio, paredes baixas para enxergar as caixas e porta na parede direita
+    // sala do estoque: suporta qualquer um dos 4 cantos (nw, ne, sw, se)
     const room = stockRoom(game.plan)
     const roomFloor = new THREE.Mesh(new THREE.PlaneGeometry(room.cols, room.rows), std(0xb7c9b0))
-    roomFloor.rotation.x = -Math.PI / 2; roomFloor.position.set((room.cols - 1) / 2, 0.012, (room.rows - 1) / 2); roomFloor.receiveShadow = true; g.add(roomFloor)
+    roomFloor.rotation.x = -Math.PI / 2
+    roomFloor.position.set((room.x0 + room.x1 - 1) / 2, 0.012, (room.z0 + room.z1 - 1) / 2)
+    roomFloor.receiveShadow = true; g.add(roomFloor)
     const H = 0.85, T = 0.14
     const roomWall = (x0, z0, x1, z1) => {
       const w = Math.abs(x1 - x0) || T, d = Math.abs(z1 - z0) || T, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2
-      g.add(box(w, H, d, wallC, cx, H / 2, cz)); g.add(box(w + 0.05, 0.07, d + 0.05, trim, cx, H + 0.035, cz))
+      if (wallMode !== 'none') {
+        addWall(w, H, d, cx, H / 2, cz)
+        g.add(box(w + 0.05, 0.07, d + 0.05, trim, cx, H + 0.035, cz))
+      } else {
+        g.add(box(w + 0.05, 0.07, d + 0.05, trim, cx, 0.035, cz))
+      }
     }
     const dz = room.door.z
-    roomWall(-0.5, room.wallZ, room.wallX + T / 2, room.wallZ)
-    roomWall(room.wallX, -0.5, room.wallX, dz - 0.5)
-    if (dz + 0.5 < room.wallZ - 0.01) roomWall(room.wallX, dz + 0.5, room.wallX, room.wallZ)
+    const rxStart = room.x0 - 0.5, rxEnd = room.x1 - 0.5
+    const rzStart = room.z0 - 0.5, rzEnd = room.z1 - 0.5
+    roomWall(rxStart, room.wallZ, rxEnd, room.wallZ)
+    if (dz - 0.5 > rzStart + 0.01) roomWall(room.wallX, rzStart, room.wallX, dz - 0.5)
+    if (dz + 0.5 < rzEnd - 0.01) roomWall(room.wallX, dz + 0.5, room.wallX, rzEnd)
     for (const s of [-0.5, 0.5]) g.add(box(0.14, 1.45, 0.14, trim, room.wallX, 0.725, dz + s))
     g.add(box(0.14, 0.1, 1.14, trim, room.wallX, 1.5, dz))
     this.addDoor(g, room.wallX, dz - 0.44, 'z', 0.88, 1.35, 0xd9b48a, 1.7, (a) => a.kind === 'player' || a.role === 'stocker') // cliente passando por perto não abre
 
-    g.add(box(cols + 0.4, 2.4, 0.2, wallC, cols / 2 - 0.5, 1.2, -0.6))
-    g.add(box(0.2, 2.4, rows + 0.4, wallC, -0.6, 1.2, rows / 2 - 0.5))
+    const wallH = wallMode === 'full' || wallMode === 'transparent' ? 2.4 : 0.08
+    const frontH = wallMode === 'full' ? 2.4 : wallMode === 'transparent' ? 2.4 : 0.08
+    addWall(cols + 0.4, wallH, 0.2, cols / 2 - 0.5, wallH / 2, -0.6)
+    addWall(0.2, wallH, rows + 0.85, -0.6, wallH / 2, (rows - 0.55) / 2)
     g.add(box(cols + 0.4, 0.12, 0.26, trim, cols / 2 - 0.5, 0.06, -0.52))
-    for (const [x0, x1] of [[-0.5, doorX - 0.5], [doorX + 0.5, cols - 0.5]]) {
-      const w = x1 - x0; g.add(box(w, 0.55, 0.3, wallC, (x0 + x1) / 2, 0.275, rows))
-      g.add(box(w, 0.08, 0.36, trim, (x0 + x1) / 2, 0.58, rows))
+    g.add(box(0.26, 0.12, rows + 0.85, trim, -0.52, 0.06, (rows - 0.55) / 2))
+    for (const [x0, x1] of [[-0.7, doorX - 0.5], [doorX + 0.5, cols - 0.3]]) {
+      const w = x1 - x0
+      if (w > 0.05) {
+        addWall(w, frontH, 0.3, (x0 + x1) / 2, frontH / 2, rows)
+        g.add(box(w, 0.08, 0.36, trim, (x0 + x1) / 2, wallMode === 'none' ? 0.04 : frontH + 0.04, rows))
+      }
     }
-    g.add(box(0.2, 0.55, rows + 0.7, wallC, cols - 0.4, 0.275, rows / 2 - 0.15))
+    addWall(0.2, frontH, rows + 0.85, cols - 0.4, frontH / 2, (rows - 0.55) / 2)
+    g.add(box(0.26, 0.08, rows + 0.88, trim, cols - 0.4, wallMode === 'none' ? 0.04 : frontH + 0.04, (rows - 0.55) / 2))
     // porta da loja: é aqui que se abre o dia
     const doorG = (this.doorG = new THREE.Group()); doorG.userData = { kind: 'door' }
     for (const dx of [-0.5, 0.5]) doorG.add(box(0.14, 1.4, 0.34, trim, doorX + dx, 0.7, rows))
+    doorG.add(box(1.14, 0.12, 0.36, trim, doorX, 1.44, rows))
     this.addDoor(doorG, doorX - 0.43, rows, 'x', 0.86, 1.3, 0x6fb3a8, -1.7)
     const doorHit = box(1.2, 2.1, 0.5, trim, doorX, 1.05, rows); doorHit.visible = false; doorG.add(doorHit); doorG.userData.hit = doorHit
-    // plaquinha ao lado da porta: verde com a loja aberta, cinza fechada
+    // plaquinha na mureta ao lado da porta: verde com a loja aberta, cinza fechada
     this.doorSign = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.13), new THREE.MeshBasicMaterial({ map: tagTex('FECHADO', '#c7c2cc'), toneMapped: false }))
-    this.doorSign.position.set(doorX + 0.86, 1.0, rows + 0.17); doorG.add(this.doorSign)
-    doorG.add(box(0.46, 0.17, 0.02, 0x3b2f4a, doorX + 0.86, 1.0, rows + 0.155))
+    this.doorSign.position.set(doorX + 0.86, 0.32, rows + 0.17); doorG.add(this.doorSign)
+    doorG.add(box(0.46, 0.17, 0.02, 0x3b2f4a, doorX + 0.86, 0.32, rows + 0.155))
     g.add(doorG)
 
-    // janelinha no fundo
-    const win = box(1.8, 1.0, 0.05, 0xbfe3ee, 3.3, 1.35, -0.48); win.material.emissive = new THREE.Color(0x3a6a7a); g.add(win)
+    // letreiro 3D na fachada acima da porta com o nome da loja
+    for (const dx of [-0.5, 0.5]) g.add(box(0.1, 0.24, 0.1, trim, doorX + dx, 1.56, rows))
+    g.add(box(2.34, 0.44, 0.16, trim, doorX, 1.76, rows))
+    const facadeMat = new THREE.MeshBasicMaterial({ map: this.makeFacadeTex(), toneMapped: false })
+    this.facadeSign = new THREE.Mesh(new THREE.PlaneGeometry(2.18, 0.34), facadeMat)
+    this.facadeSign.position.set(doorX, 1.76, rows + 0.085)
+    this.facadeSignBack = new THREE.Mesh(new THREE.PlaneGeometry(2.18, 0.34), facadeMat)
+    this.facadeSignBack.position.set(doorX, 1.76, rows - 0.085)
+    this.facadeSignBack.rotation.y = Math.PI
+    g.add(this.facadeSign, this.facadeSignBack)
+
+    // janelinha no fundo (só quando há paredes)
+    if (wallMode !== 'none') {
+      const win = box(1.8, 1.0, 0.05, 0xbfe3ee, 3.3, 1.35, -0.48)
+      win.material.emissive = new THREE.Color(0x3a6a7a)
+      if (isTrans) { win.material.transparent = true; win.material.opacity = 0.4 }
+      g.add(win)
+    }
 
     // caixa: só a registradora, num pedestal de um lugar
     const counter = new THREE.Group(); counter.userData = { kind: 'counter' }
@@ -401,9 +532,11 @@ export class Renderer {
   }
 
   decorate(g, cols, rows, doorX) {
-    // lambri nas paredes
-    g.add(box(cols + 0.4, 0.8, 0.24, 0xe3c4a0, cols / 2 - 0.5, 0.4, -0.6))
-    g.add(box(0.24, 0.8, rows + 0.4, 0xe3c4a0, -0.6, 0.4, rows / 2 - 0.5))
+    // lambri nas paredes (somente quando há paredes)
+    if ((game.shopStyle?.wallMode || 'full') !== 'none') {
+      g.add(box(cols + 0.4, 0.8, 0.24, 0xe3c4a0, cols / 2 - 0.5, 0.4, -0.6))
+      g.add(box(0.24, 0.8, rows + 0.85, 0xe3c4a0, -0.6, 0.4, (rows - 0.55) / 2))
+    }
     // pendentes
     for (const l of this.lamps) {
       const cord = box(0.02, 0.5, 0.02, 0x3b2f4a, l.position.x, 2.45, l.position.z); const shade = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.22, 14, 1, true), new THREE.MeshStandardMaterial({ color: 0xef8a77, side: THREE.DoubleSide, roughness: 0.8 }))
@@ -811,6 +944,13 @@ export class Renderer {
     gr.add(model)
     const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3())
     addHit(gr, Math.max(0.5, Math.min(1, size.x)), Math.max(0.5, size.y), Math.max(0.5, Math.min(1, size.z)))
+    if (isArcade(d)) {
+      const hsBadge = sprite(tagTex('🕹️ Jogar', '#e8dcc8', '#3b2f4a'), 1.2, 0.3)
+      hsBadge.position.y = Math.max(1.55, size.y + 0.35)
+      gr.add(hsBadge)
+      gr.userData.hsBadge = hsBadge
+      gr.userData.hsKey = ''
+    }
     this.scene.add(gr)
     return gr
   }
@@ -825,6 +965,17 @@ export class Renderer {
       if (d.type === 'radio') { // o rádio balança no ritmo enquanto toca
         const set = gr.children[0].children.find((c) => c.userData.radio)
         if (set) set.scale.y = settings.musicOn || ui.externalPlaying ? 1 + Math.abs(Math.sin(this.t * 4.6)) * 0.05 : 1
+      }
+      if (gr.userData.hsBadge) {
+        const hs = d.highScore
+        const hsKey = hs?.score ? String(hs.score) : 'none'
+        if (gr.userData.hsKey !== hsKey) {
+          gr.userData.hsKey = hsKey
+          const text = hs?.score ? `🏆 ${hs.score}` : '🕹️ Jogar'
+          const bg = hs?.score ? '#f8dfa2' : '#e8dcc8'
+          gr.userData.hsBadge.material.map = tagTex(text, bg, '#3b2f4a')
+          gr.userData.hsBadge.material.needsUpdate = true
+        }
       }
     }
     if (this.counterG) this.place(this.counterG, 'counter', game.register)
@@ -843,6 +994,31 @@ export class Renderer {
       const [text, bg] = game.phase === 'open' ? ['ABERTO', '#7fd6a8'] : game.phase === 'closing' ? ['FECHANDO', '#c7c2cc'] : game.phase === 'lunch' ? ['ALMOÇO', '#c7c2cc'] : ['FECHADO', '#c7c2cc']
       this.doorSign.material.map = tagTex(text, bg); this.doorSign.material.needsUpdate = true
     }
+  }
+  makeFacadeTex() {
+    const label = String(game.shopName || game.branchName || 'Lojinha Lofi').trim() || 'Lojinha Lofi'
+    const trim = game.shopStyle?.trimColor || '#b98a5a'
+    const c = document.createElement('canvas'); c.width = 512; c.height = 84
+    const ctx = c.getContext('2d')
+    ctx.fillStyle = '#fff6e5'
+    ctx.fillRect(0, 0, 512, 84)
+    ctx.strokeStyle = trim
+    ctx.lineWidth = 8
+    ctx.strokeRect(4, 4, 504, 76)
+    ctx.fillStyle = '#3b2f4a'
+    const size = label.length > 18 ? 30 : label.length > 13 ? 36 : 42
+    ctx.font = `900 ${size}px ui-rounded, system-ui, sans-serif`
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.fillText(label, 256, 44, 476)
+    const t = new THREE.CanvasTexture(c)
+    t.colorSpace = THREE.SRGBColorSpace
+    return t
+  }
+  updateFacadeSign() {
+    if (!this.facadeSign) return
+    const tex = this.makeFacadeTex()
+    this.facadeSign.material.map = tex
+    this.facadeSign.material.needsUpdate = true
   }
   // posição na tela do balão de roubo (o botão em si é da interface)
   syncTheft() {
@@ -931,17 +1107,35 @@ export class Renderer {
       m.visible = x1 > x0 && z1 > z0
       if (m.visible) { m.position.set((x0 + x1) / 2, 0.05, (z0 + z1) / 2); m.scale.set(x1 - x0, z1 - z0, 1) }
     }
-    const { cols, rows } = game.plan, st = nextPlan(b).stock
-    const x0 = -0.5 - b.w, x1 = cols - 0.5 + b.e, z0 = -0.5 - b.n, z1 = rows - 0.5 + b.s
-    const [west, east, back, front] = this.buildFloor
-    area(west, x0, z0, -0.5, z1); area(east, cols - 0.5, z0, x1, z1); area(back, -0.5, z0, cols - 0.5, -0.5); area(front, -0.5, rows - 0.5, cols - 0.5, z1)
-    area(this.buildRoom, x0, z0, x0 + st.cols, z0 + st.rows)
     const r = this.canvas.getBoundingClientRect(), v = new THREE.Vector3()
-    const midX = (x0 + x1) / 2, midZ = (z0 + z1) / 2
-    const list = [
-      ['w', x0 - 0.6, midZ], ['e', x1 + 0.6, midZ], ['n', midX, z0 - 0.6], ['s', midX, z1 + 0.6],
-      ['stockCols', x0 + st.cols, z0 + st.rows / 2], ['stockRows', x0 + st.cols / 2, z0 + st.rows],
-    ].map(([wall, x, z]) => {
+    let list
+    if (b.initial) {
+      const np = nextPlan(b), sr = stockRoom(np)
+      area(this.buildFloor[0], -0.5, -0.5, np.cols - 0.5, np.rows - 0.5)
+      for (const m of this.buildFloor.slice(1)) m.visible = false
+      area(this.buildRoom, sr.x0 - 0.5, sr.z0 - 0.5, sr.x1 - 0.5, sr.z1 - 0.5)
+      const scx = (sr.x0 + sr.x1 - 1) / 2, scz = (sr.z0 + sr.z1 - 1) / 2
+      const sEdgeX = sr.corner === 'ne' || sr.corner === 'se' ? sr.x0 - 0.5 : sr.x1 - 0.5
+      const sEdgeZ = sr.corner === 'sw' || sr.corner === 'se' ? sr.z0 - 0.5 : sr.z1 - 0.5
+      list = [
+        ['e', np.cols - 0.5 + 0.6, (np.rows - 1) / 2],
+        ['s', (np.cols - 1) / 2, np.rows - 0.5 + 0.6],
+        ['stockCols', sEdgeX, scz],
+        ['stockRows', scx, sEdgeZ],
+      ]
+    } else {
+      const { cols, rows } = game.plan, np = nextPlan(b), sr = stockRoom(np)
+      const x0 = -0.5 - b.w, x1 = cols - 0.5 + b.e, z0 = -0.5 - b.n, z1 = rows - 0.5 + b.s
+      const [west, east, back, front] = this.buildFloor
+      area(west, x0, z0, -0.5, z1); area(east, cols - 0.5, z0, x1, z1); area(back, -0.5, z0, cols - 0.5, -0.5); area(front, -0.5, rows - 0.5, cols - 0.5, z1)
+      area(this.buildRoom, sr.x0 - 0.5 - b.w, sr.z0 - 0.5 - b.n, sr.x1 - 0.5 - b.w, sr.z1 - 0.5 - b.n)
+      const midX = (x0 + x1) / 2, midZ = (z0 + z1) / 2
+      list = [
+        ['w', x0 - 0.6, midZ], ['e', x1 + 0.6, midZ], ['n', midX, z0 - 0.6], ['s', midX, z1 + 0.6],
+        ['stockCols', sr.x1 - 0.5 - b.w, (sr.z0 + sr.z1 - 1) / 2 - b.n], ['stockRows', (sr.x0 + sr.x1 - 1) / 2 - b.w, sr.z1 - 0.5 - b.n],
+      ]
+    }
+    list = list.map(([wall, x, z]) => {
       v.set(x, 0.9, z).project(this.camera)
       return { wall, x: Math.round(Math.max(80, Math.min(r.width - 80, r.left + ((v.x + 1) / 2) * r.width))), y: Math.round(Math.max(90, Math.min(r.height - 200, r.top + ((1 - v.y) / 2) * r.height))) }
     })
@@ -1028,7 +1222,8 @@ export class Renderer {
       }
       this.tagView('s' + s.id, v, 'shelf', s.id, s.groupId || 's' + s.id)
       const exp = modeMods().expiration && s.product && s.count > 0 ? s.daysLeft : null
-      const k = `${s.product}|${s.price}|${s.count}|${!!s.broken}|${exp}`
+      const curPrice = effectiveShelfPrice(s)
+      const k = `${s.product}|${curPrice}|${s.count}|${!!s.broken}|${exp}`
       if (k !== v.key) {
         v.key = k
         const p = s.product && PID[s.product], pid = s.product || null
@@ -1036,10 +1231,10 @@ export class Renderer {
         if (s.broken) d = { text: s.count ? `desligado · ${s.count}` : 'desligado', bg: '#e0675d', fg: '#fff', pid }
         else if (!p) d = { text: 'vazia', bg: '#cfc6b8', fg: '#6b6070' }
         else if (exp != null && exp <= 0) d = { text: `VENCIDO · ${s.count}`, bg: '#e0675d', fg: '#fff', pid }
-        else if (s.price == null) d = { text: 'sem preço', bg: '#f4a09a', pid }
+        else if (curPrice == null) d = { text: 'sem preço', bg: '#f4a09a', pid }
         else if (s.count === 0) d = { text: 'esgotado', bg: '#f4a09a', pid }
-        else if (exp === 1) d = { text: `${money(s.price).slice(3)} · ${s.count} (1d)`, bg: '#f8dfa2', pid }
-        else d = { text: `${money(s.price).slice(3)} · ${s.count}`, bg: s.count <= 6 ? '#f8dfa2' : '#f6e7cf', pid }
+        else if (exp === 1) d = { text: `${money(curPrice).slice(3)} · ${s.count} (1d)`, bg: '#f8dfa2', pid }
+        else d = { text: `${money(curPrice).slice(3)} · ${s.count}`, bg: s.count <= 6 ? '#f8dfa2' : '#f6e7cf', pid }
         this.tagText('s' + s.id, d)
       }
     }
@@ -1382,7 +1577,12 @@ export class Renderer {
   initInput() {
     let down = null
     const c = this.canvas
-    c.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY } })
+    c.addEventListener('pointerdown', (e) => {
+      if (document.activeElement && document.activeElement !== document.body && document.activeElement !== c) {
+        document.activeElement.blur?.()
+      }
+      down = { x: e.clientX, y: e.clientY }
+    })
     c.addEventListener('pointerup', (e) => {
       if (down && e.button === 0 && (ui.held || Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6)) this.onClick?.(this.pick(e), e)
       down = null
@@ -1411,7 +1611,7 @@ export class Renderer {
         for (const p of world.pets) add(this.actorViews.get(p.id)?.gr)
         for (const a of world.customers) add(this.actorViews.get(a.id)?.gr) // a equipe não é clicável no cenário: clique nela só pelo avatar
         for (const v of this.dirtViews.values()) add(v.gr)
-        for (const d of toRaw(game.decor)) if (isUsable(d)) add(this.decorViews.get(d.id))
+        for (const d of toRaw(game.decor)) if (isUsable(d) || isArcade(d)) add(this.decorViews.get(d.id))
       }
       for (const h of this.ray.intersectObjects(hits, false)) {
         let o = h.object

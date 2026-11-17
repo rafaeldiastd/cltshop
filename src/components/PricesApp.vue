@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { PhTag, PhCoffee, PhSnowflake, PhArrowCounterClockwise } from '@phosphor-icons/vue'
 import PriceStepper from './PriceStepper.vue'
-import { game, money, costOf, refOf, productPrice, setPrice, stockInfo, costChange, cafeMenu, cafePrice, cafeCost, cafeRef, cafeCostChange, setCafePrice } from '../game/state.js'
+import { game, money, costOf, refOf, productPrice, setPrice, stockInfo, costChange, cafeMenu, cafePrice, cafeCost, cafeRef, cafeCostChange, setCafePrice, modeMods, expiryPriceOf, setExpiryPrice, stepExpiryPrice } from '../game/state.js'
 import { PRODUCTS } from '../game/config.js'
 import { productThumb } from '../game/assets.js'
 
@@ -54,6 +54,16 @@ const missing = computed(() => allProducts().filter((p) => productPrice(p.id) ==
             <template v-if="margin(p.id) != null"><b>{{ money(margin(p.id)) }}</b><span class="small">{{ pct(p.id) > 0 ? '+' : '' }}{{ pct(p.id) }}%</span></template>
             <span v-else class="muted">—</span>
           </div>
+          <div v-if="modeMods().expiration" class="exp-row">
+            <span class="exp-lbl">⏰ Perto de vencer (≤2d):</span>
+            <b>{{ expiryPriceOf(p.id) != null ? money(expiryPriceOf(p.id)) : 'Igual ao normal' }}</b>
+            <div class="exp-btns">
+              <button class="btn sm" @click="stepExpiryPrice(p.id, -0.5)">−0,50</button>
+              <button class="btn sm" @click="stepExpiryPrice(p.id, 0.5)">+0,50</button>
+              <button class="btn sm" @click="setExpiryPrice(p.id, Math.max(0.2, Math.round((productPrice(p.id) ?? refOf(p.id)) * 0.7 * 100) / 100))">−30%</button>
+              <button v-if="expiryPriceOf(p.id) != null" class="btn sm" title="Voltar a usar o preço normal" @click="setExpiryPrice(p.id, null)">Normal</button>
+            </div>
+          </div>
         </article>
       </template>
 
@@ -84,7 +94,7 @@ p { margin: 2px 0; }
 .bulk { display: flex; gap: 6px; flex-wrap: wrap; }
 .scroll { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 5px; }
 .news { background: var(--mustard); border-radius: 10px; padding: 5px 12px; font-size: 13px; font-weight: 700; }
-.row { display: grid; grid-template-columns: 40px minmax(120px, 1fr) 140px minmax(240px, 300px) 86px; gap: 10px; align-items: center; background: #fff; border-radius: 12px; padding: 6px 10px; font-size: 14px; }
+.row { display: grid; grid-template-columns: 40px minmax(120px, 1fr) 140px minmax(240px, 300px) 86px; gap: 6px 10px; align-items: center; background: #fff; border-radius: 12px; padding: 6px 10px; font-size: 14px; }
 .row img { width: 38px; height: 38px; }
 .ico { font-size: 30px; color: var(--plum2); display: grid; place-items: center; }
 .name { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
@@ -94,5 +104,8 @@ p { margin: 2px 0; }
 .mkt { background: none; text-align: left; padding: 0; font: inherit; color: inherit; text-decoration: underline dotted; cursor: pointer; }
 .mkt:hover { color: var(--teal); }
 .mar { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.exp-row { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #fffbeb; border-radius: 8px; padding: 4px 8px; font-size: 12px; border: 1px solid #fde68a; }
+.exp-lbl { font-weight: 800; color: #92400e; }
+.exp-btns { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
 @media (max-width: 900px) { .row { grid-template-columns: 40px 1fr auto; } .facts, .step { grid-column: 2 / -1; } .mar { grid-column: 3; grid-row: 1; } }
 </style>

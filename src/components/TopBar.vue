@@ -1,10 +1,10 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { PhCloudSun, PhList, PhLock, PhPause, PhPlay, PhSnowflake, PhStar, PhSun, PhTicket, PhGlobe, PhTimer } from '@phosphor-icons/vue'
-import { game, ui, money, clockText, xpNext, passPending, daySeconds, regionOf } from '../game/state.js'
+import { game, ui, money, clockText, xpNext, passPending, daySeconds, regionOf, cycleWallMode } from '../game/state.js'
 import { mp } from '../game/multiplayer.js'
 import GoalsCard from './GoalsCard.vue'
-import { WEATHER, GAME_MODES, POMODORO_PRESETS } from '../game/config.js'
+import { WEATHER, GAME_MODES, POMODORO_PRESETS, WALL_MODES } from '../game/config.js'
 
 const WEATHER_ICON = { hot: PhSun, mild: PhCloudSun, cold: PhSnowflake }
 
@@ -16,6 +16,7 @@ const label = { prep: 'Preparação', open: 'Aberta', lunch: 'Almoço', closing:
 const stars = computed(() => Math.round(game.rep))
 const xpPct = computed(() => Math.round(Math.min(1, game.career.xp / xpNext()) * 100))
 const curMode = computed(() => GAME_MODES[game.mode] || GAME_MODES.normal)
+const wallModeInfo = computed(() => WALL_MODES.find((w) => w.id === (game.shopStyle?.wallMode || 'full')) || WALL_MODES[0])
 const curRegion = computed(() => regionOf())
 const modeOpen = ref(false)
 const applyPreset = (p) => {
@@ -100,6 +101,7 @@ const openStartMenu = () => { modeOpen.value = false; ui.modal = 'start' }
       <button class="btn sm" :class="{ primary: game.speed === 1 && !game.paused }" @click="game.speed = 1; game.paused = false">1×</button>
       <button class="btn sm" :class="{ primary: game.speed === 2 }" @click="game.speed = 2; game.paused = false">2×</button>
     </div>
+    <button v-if="game.plan.built !== false && !ui.editing" class="btn" title="Alternar paredes (Completas / Transparentes / Sem paredes)" @click="cycleWallMode">{{ wallModeInfo.icon }} {{ wallModeInfo.name }}</button>
     <button v-if="!ui.editing && !mp.visiting" class="btn mp-btn" title="Multiplayer e visitas em outras lojas" @click="ui.modal = 'multiplayer'">
       <PhGlobe weight="duotone" /> Online
       <b v-if="mp.visitors.length" class="v-badge">{{ mp.visitors.length }}</b>

@@ -19,7 +19,7 @@ import {
   PhClock
 } from '@phosphor-icons/vue'
 import PriceStepper from './PriceStepper.vue'
-import { game, ui, money, productPrice, setPrice, costOf, refOf, shelfCap, upgradeShelf, discardExpiredShelf, applyClearanceDiscount, modeMods } from '../game/state.js'
+import { game, ui, money, productPrice, setPrice, costOf, refOf, shelfCap, upgradeShelf, discardExpiredShelf, applyClearanceDiscount, modeMods, expiryPriceOf, setExpiryPrice, stepExpiryPrice, setBatchPrice, batchPrice } from '../game/state.js'
 import { PRODUCTS, PID, SHELF_BOOST, FREEZER, canStockProduct, shelfLifeOf } from '../game/config.js'
 import { world } from '../game/world.js'
 import { productThumb } from '../game/assets.js'
@@ -67,6 +67,7 @@ const selectProduct = (pid) => {
   shelf.value.product = pid || null
   shelf.value.price = pid ? game.priceMemory[pid] ?? null : null
   shelf.value.daysLeft = null
+  shelf.value.batches = []
 }
 
 const expEnabled = computed(() => modeMods().expiration)
@@ -128,6 +129,13 @@ watch(() => shelf.value?.broken, (isBroken) => {
       </div>
 
       <button class="btn sm close-btn" aria-label="Fechar" @click="ui.panelShelf = null">
+        <PhX weight="bold" />
+      </button>
+    </div>
+
+    <div v-if="shelf.prankedBy" class="prank-banner">
+      <span>😈 Bagunçada por: <b>{{ shelf.prankedBy }}</b></span>
+      <button class="btn sm" title="Marcar como visto" @click="delete shelf.prankedBy">
         <PhX weight="bold" />
       </button>
     </div>
@@ -197,19 +205,37 @@ watch(() => shelf.value?.broken, (isBroken) => {
             <span class="sub-title"><PhClock weight="bold" /> Validade</span>
             <span class="status-badge" :class="expCls">{{ expText }}</span>
           </div>
+          <div class="exp-price-row">
+            <span class="exp-lbl">Preço perto de vencer (≤2d):</span>
+            <b>{{ expiryPriceOf(p.id) != null ? money(expiryPriceOf(p.id)) : 'Igual ao normal' }}</b>
+            <div class="exp-btns">
+              <button class="btn sm" @click="stepExpiryPrice(p.id, -0.5)">−0,50</button>
+              <button class="btn sm" @click="stepExpiryPrice(p.id, 0.5)">+0,50</button>
+              <button class="btn sm" @click="applyClearanceDiscount(shelf.id)">−30%</button>
+              <button v-if="expiryPriceOf(p.id) != null" class="btn sm" @click="setExpiryPrice(p.id, null)">Normal</button>
+            </div>
+          </div>
+          <div v-if="shelf.batches && shelf.batches.length" class="batches-list">
+            <div
+              v-for="(b, idx) in shelf.batches"
+              :key="idx"
+              class="batch-pill"
+              :class="{ bad: b.daysLeft <= 0, warn: b.daysLeft > 0 && b.daysLeft <= 2 }"
+            >
+              <span>{{ b.count }} un · {{ b.daysLeft <= 0 ? 'vencido' : b.daysLeft === 1 ? '1d' : `${b.daysLeft}d` }}</span>
+              <span v-if="b.daysLeft > 0" class="b-price">
+                <b>{{ money(batchPrice(shelf, b) ?? refPrice) }}</b>
+                <button class="mini-step" title="Diminuir R$ 0,50" @click="setBatchPrice(shelf.id, b.daysLeft, (batchPrice(shelf, b) ?? refPrice) - 0.5)">−</button>
+                <button class="mini-step" title="Aumentar R$ 0,50" @click="setBatchPrice(shelf.id, b.daysLeft, (batchPrice(shelf, b) ?? refPrice) + 0.5)">+</button>
+              </span>
+            </div>
+          </div>
           <button
             v-if="shelf.count > 0 && daysLeft != null && daysLeft <= 0"
             class="btn primary sm w-full action-btn"
             @click="discardExpiredShelf(shelf.id)"
           >
             <PhTrash weight="bold" /> Descartar vencidos
-          </button>
-          <button
-            v-else-if="shelf.count > 0 && daysLeft != null && daysLeft <= 2"
-            class="btn warn sm w-full action-btn"
-            @click="applyClearanceDiscount(shelf.id)"
-          >
-            <PhTag weight="bold" /> Queima de estoque (−30%)
           </button>
         </div>
 
@@ -717,5 +743,75 @@ watch(() => shelf.value?.broken, (isBroken) => {
 }
 .w-full {
   width: 100%;
+}
+.batches-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.exp-price-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 11.5px;
+}
+.exp-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.batch-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(59, 47, 74, 0.14);
+}
+.b-price {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mini-step {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid rgba(59, 47, 74, 0.2);
+  background: var(--cream2);
+  color: var(--plum);
+  font-weight: 900;
+  cursor: pointer;
+}
+.batch-pill.warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+.batch-pill.bad {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.prank-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: #fef3c7;
+  border: 1.5px solid #f59e0b;
+  color: #92400e;
+  font-size: 12px;
+  font-weight: 700;
 }
 </style>

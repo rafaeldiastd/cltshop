@@ -6,6 +6,7 @@ import { mp, sendChat } from '../game/multiplayer.js'
 
 const draft = ref('')
 const chatInput = ref(null)
+const chatDock = ref(null)
 const showHistory = ref(false)
 
 function splitTokens(text) {
@@ -33,8 +34,20 @@ function onGlobalKey(e) {
   chatInput.value?.focus()
 }
 
-onMounted(() => addEventListener('keydown', onGlobalKey))
-onBeforeUnmount(() => removeEventListener('keydown', onGlobalKey))
+function onPointerDown(e) {
+  if (document.activeElement === chatInput.value && chatDock.value && !chatDock.value.contains(e.target)) {
+    chatInput.value?.blur()
+  }
+}
+
+onMounted(() => {
+  addEventListener('keydown', onGlobalKey)
+  addEventListener('pointerdown', onPointerDown)
+})
+onBeforeUnmount(() => {
+  removeEventListener('keydown', onGlobalKey)
+  removeEventListener('pointerdown', onPointerDown)
+})
 </script>
 
 <template>
@@ -67,7 +80,7 @@ onBeforeUnmount(() => removeEventListener('keydown', onGlobalKey))
   </div>
 
   <!-- Barra de chat no canto inferior esquerdo -->
-  <div v-if="!ui.editing && !ui.build" class="chat-dock">
+  <div v-if="!ui.editing && !ui.build" ref="chatDock" class="chat-dock">
     <div v-if="showHistory" class="card chat-log">
       <div class="log-head">
         <b><PhChatCircleDots weight="duotone" /> Chat da Loja</b>

@@ -5,27 +5,56 @@ export const DIRS = [[0, 1], [1, 0], [0, -1], [-1, 0]]
 const k = (x, z) => x + ',' + z
 const step = (o, rot, n = 1) => ({ x: o.x + DIRS[rot % 4][0] * n, z: o.z + DIRS[rot % 4][1] * n })
 
-// planta da loja, guardada no save: tamanho, posição da porta e tamanho da sala do estoque
-export const basePlan = (level) => {
+// planta da loja, guardada no save: tamanho, posição da porta e tamanho/canto da sala do estoque
+export const basePlan = (level, built = true) => {
   const L = LEVELS[level]
-  return { cols: L.cols, rows: L.rows, doorX: Math.floor(L.cols / 2), stock: { cols: L.stock.cols, rows: L.stock.rows } }
+  if (!built) {
+    return { cols: 0, rows: 0, doorX: 0, built: false, lotCols: L.maxCols, lotRows: L.maxRows, stock: { cols: 0, rows: 0, corner: 'nw' } }
+  }
+  return { cols: L.cols, rows: L.rows, doorX: Math.floor(L.cols / 2), built: true, lotCols: L.maxCols, lotRows: L.maxRows, stock: { cols: L.stock.cols, rows: L.stock.rows, corner: 'nw' } }
 }
-export const planKey = (p) => [p.cols, p.rows, p.doorX, p.stock.cols, p.stock.rows].join()
-export const planArea = (p) => p.cols * p.rows
-export const dims = (plan) => ({ cols: plan.cols, rows: plan.rows, doorX: plan.doorX })
+export const planKey = (p) => [p.built === false ? 0 : 1, p.cols, p.rows, p.doorX, p.stock?.cols || 0, p.stock?.rows || 0, p.stock?.corner || 'nw'].join()
+export const planArea = (p) => (p.built === false ? 0 : p.cols * p.rows)
+export const dims = (plan) => ({
+  cols: plan.built === false ? (plan.lotCols || 11) : plan.cols,
+  rows: plan.built === false ? (plan.lotRows || 9) : plan.rows,
+  doorX: plan.built === false ? Math.floor((plan.lotCols || 11) / 2) : plan.doorX,
+})
 export const doorTile = (plan) => { const d = dims(plan); return { x: d.doorX, z: d.rows } }
 export const doorInside = (plan) => { const d = dims(plan); return { x: d.doorX, z: d.rows - 1 } }
 
-// ---------- sala do estoque (canto do fundo, porta na parede direita) ----------
+// ---------- sala do estoque (em um dos 4 cantos, com porta voltada para o salão) ----------
 const STACK = 3 // caixas por lugar; o quadrado da porta fica livre
-// salas grandes (últimas ampliações do Mercadinho) empilham mais alto: de 19 lugares úteis em diante a capacidade cresce 4,3 por lugar e chega a 100 caixas na sala máxima (6×5)
 const STOCK_BIG = { from: 19, perTile: 4.3, max: 100 }
-const stockCap = (tiles) => (tiles <= STOCK_BIG.from ? tiles * STACK : Math.min(STOCK_BIG.max, Math.round(STOCK_BIG.from * STACK + (tiles - STOCK_BIG.from) * STOCK_BIG.perTile)))
+const stockCap = (tiles) => (tiles <= 0 ? 0 : tiles <= STOCK_BIG.from ? tiles * STACK : Math.min(STOCK_BIG.max, Math.round(STOCK_BIG.from * STACK + (tiles - STOCK_BIG.from) * STOCK_BIG.perTile)))
 export const stockRoom = (plan) => {
-  const { cols, rows } = plan.stock
-  return { cols, rows, cap: stockCap(cols * rows - 1), wallX: cols - 0.5, wallZ: rows - 0.5, door: { x: cols - 1, z: rows - 1 }, doorOut: { x: cols, z: rows - 1 } }
+  if (plan.built === false || !plan.stock?.cols || !plan.stock?.rows) {
+    return { cols: 0, rows: 0, x0: 0, z0: 0, x1: 0, z1: 0, corner: 'nw', cap: 0, wallX: -1, wallZ: -1, door: { x: -1, z: -1 }, doorOut: { x: 0, z: 0 } }
+  }
+  const sc = plan.stock.cols, sr = plan.stock.rows
+  const corner = plan.stock.corner || 'nw'
+  const east = corner === 'ne' || corner === 'se'
+  const south = corner === 'sw' || corner === 'se'
+  const x0 = east ? plan.cols - sc : 0
+  const z0 = south ? plan.rows - sr : 0
+  const x1 = x0 + sc, z1 = z0 + sr
+  const doorX = east ? x0 : x1 - 1
+  const doorZ = south ? z0 : z1 - 1
+  const doorOut = { x: east ? x0 - 1 : x1, z: doorZ }
+  return {
+    cols: sc, rows: sr, x0, z0, x1, z1, corner,
+    cap: stockCap(sc * sr - 1),
+    wallX: east ? x0 - 0.5 : x1 - 0.5,
+    wallZ: south ? z0 - 0.5 : z1 - 0.5,
+    door: { x: doorX, z: doorZ },
+    doorOut,
+  }
 }
-export const inStock = (plan, x, z) => { const r = stockRoom(plan); return x < r.wallX && z < r.wallZ }
+export const inStock = (plan, x, z) => {
+  if (plan.built === false) return false
+  const r = stockRoom(plan)
+  return x >= r.x0 - 0.5 && x < r.x1 - 0.5 && z >= r.z0 - 0.5 && z < r.z1 - 0.5
+}
 export const stockStand = (plan) => stockRoom(plan).door
 
 // ---------- canto visual: a ponta de uma fileira, a 90° dela, ganha a forma de canto convexo ----------
@@ -80,7 +109,8 @@ export function backPartner(s, shelves) {
   return shelves.find((o) => o !== s && !o.fridge && o.x === s.x + dx && o.z === s.z + dz && (o.rot || 0) % 4 === (rot + 2) % 4)
 }
 export const isUsable = (d) => d.type === 'computer' || d.type === 'radio'
-export const onFloor = (plan, x, z) => { const { cols, rows } = dims(plan); return x >= 0 && z >= 0 && x < cols && z < rows && !inStock(plan, x, z) }
+export const isArcade = (d) => !!d && (d.type === 'arcade' || d.type === 'pinball' || d.type === 'dance')
+export const onFloor = (plan, x, z) => { if (plan.built === false) return false; const { cols, rows } = dims(plan); return x >= 0 && z >= 0 && x < cols && z < rows && !inStock(plan, x, z) }
 
 // a fila sai da frente do caixa e segue para um lado, para o outro ou reto, o que couber
 export function queueFor(r, isFree) {
@@ -197,7 +227,7 @@ export const usableDecor = (plan) => [
 export function boxSlots(boxes, plan) {
   const d = dims(plan), room = stockRoom(plan)
   const spots = []
-  for (let z = 0; z < room.rows; z++) for (let x = 0; x < room.cols; x++) if (x !== room.door.x || z !== room.door.z) spots.push({ x, z })
+  for (let z = room.z0; z < room.z1; z++) for (let x = room.x0; x < room.x1; x++) if (x !== room.door.x || z !== room.door.z) spots.push({ x, z })
   const out = new Map()
   let iDock = 0
   const inRoom = []

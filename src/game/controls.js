@@ -15,10 +15,11 @@ export function onClick(hit) {
     return
   }
   if (window.__visiting) {
-    if (hit.kind === 'floor') world.cmdMove(hit.x, hit.z)
+    if (hit.kind === 'floor') { ui.panelArcade = null; world.cmdMove(hit.x, hit.z) }
     else if (hit.kind === 'dirt') world.cmdClean(game.dirt.find((d) => d.id === hit.id))
     else if (hit.kind === 'pet') world.cmdVisitPet()
     else if (hit.kind === 'shelf') world.cmdPrankShelf(shelfOf(hit.id))
+    else if (hit.kind === 'decor') { const d = game.decor.find((x) => x.id === hit.id); d && world.cmdUse(d) }
     return
   }
   if (hit.kind === 'box') { const b = boxOf(hit.id); b && world.cmdBox(b) }
@@ -30,7 +31,7 @@ export function onClick(hit) {
   else if (hit.kind === 'dirt') world.cmdClean(game.dirt.find((d) => d.id === hit.id))
   else if (hit.kind === 'cafe') world.openCafePanel()
   else if (hit.kind === 'decor') { const d = game.decor.find((x) => x.id === hit.id); d && world.cmdUse(d) }
-  else if (hit.kind === 'floor') { ui.panelShelf = null; ui.panelCafe = false; world.cmdMove(hit.x, hit.z) }
+  else if (hit.kind === 'floor') { ui.panelShelf = null; ui.panelCafe = false; ui.panelArcade = null; world.cmdMove(hit.x, hit.z) }
 }
 
 export { hoverText } from './texts.js'

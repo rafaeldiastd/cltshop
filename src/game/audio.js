@@ -96,3 +96,8 @@ export function sfx(name) {
   else if (name === 'chime') [523, 659, 784].forEach((f, i) => tone(f, t + i * 0.12, 0.8, { vol: 0.05, lp: 3000, dest: master }))
   else if (name === 'alarm') [0, 0.18, 0.36, 0.54].forEach((dt, i) => tone(i % 2 === 0 ? 880 : 660, t + dt, 0.15, { type: 'sawtooth', vol: 0.04, attack: 0.005, lp: 2400, dest: master }))
 }
+export function playNote(freq, dur = 0.18, type = 'triangle', vol = 0.08) {
+  if (!ensure() || !sfxOn) return
+  if (ctx.state === 'suspended') ctx.resume()
+  tone(freq, ctx.currentTime, dur, { type, vol, attack: 0.005, lp: 3200, dest: master })
+}

@@ -1,5 +1,6 @@
 // Modo layout: pegar um móvel, escolher o lugar e soltar. Só com a loja fechada.
 import { game, ui, hooks, toast, uid, money, isClosed, maxShelves, maxFreezers, maxMeat, maxProduce, shelfCount, freezerCount, meatCount, produceCount, decorCount } from './state.js'
+import { isDecorUnlocked, decorUnlockHint } from './goals.js'
 import { RESALE, SHELF_PRICE, WALL_SHELF_PRICE, FREEZER_PRICE, PRODUCE_PRICE, MEAT_PRICE, DECOR, CAFE } from './config.js'
 import { checkLayout, dims, shelfAccess, cashierTile, queueTiles, queueFor, onFloor, produceSlots } from './layout.js'
 export { produceSlots }
@@ -339,8 +340,9 @@ export function buyCafe() {
   holdNew('cafe', { id: uid(), x: -99, z: -99, rot: 0 }, CAFE.price)
 }
 export const decorMaxed = (type) => !!DECOR[type].max && decorCount(type) >= DECOR[type].max
-export const canBuyDecor = (type) => isClosed() && game.money >= DECOR[type].price && !decorMaxed(type)
+export const canBuyDecor = (type) => isClosed() && isDecorUnlocked(type) && game.money >= DECOR[type].price && !decorMaxed(type)
 export function buyDecor(type) {
+  if (!isDecorUnlocked(type)) return toast(`🔒 Desbloqueie cumprindo a meta: ${decorUnlockHint(type)}`, 'bad')
   if (!canBuyDecor(type)) return toast(!isClosed() ? 'Compre decoração com a loja fechada' : decorMaxed(type) ? 'Você já tem esse item' : 'Caixa insuficiente', 'bad')
   holdNew('decor', { id: uid(), type, x: -99, z: -99, rot: 0, ...(type === 'frame' ? { hue: Math.floor(Math.random() * 3) } : {}) }, DECOR[type].price)
 }

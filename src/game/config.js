@@ -124,6 +124,15 @@ export const CAFE_MENU = [
 export const CAFE_ID = Object.fromEntries(CAFE_MENU.map((m) => [m.id, m]))
 // construção: 1 quadrado = 1 m²; o preço sobe conforme a área total, e o m² de estoque custa o dobro
 export const BUILD = { base: 20, perM2: 0.375, from: 63, stockFactor: 2 }
+export const BUILD_MODES = {
+  normal:   { initRate: 5, base: 32, perM2: 0.6,  from: 30, minCols: 6, minRows: 5, minStockCols: 2, minStockRows: 2, minStockArea: 6, minSalesArea: 20 },
+  hardcore: { initRate: 5, base: 40, perM2: 0.75, from: 30, minCols: 6, minRows: 5, minStockCols: 2, minStockRows: 2, minStockArea: 6, minSalesArea: 20 },
+}
+export const WALL_MODES = [
+  { id: 'full', name: 'Completas', icon: '🧱' },
+  { id: 'transparent', name: 'Transparentes', icon: '🪟' },
+  { id: 'none', name: 'Sem paredes', icon: '🫥' },
+]
 
 // o que o cliente sente: aparece no balão sobre a cabeça e na aba Clientes
 export const MOODS = {
@@ -153,30 +162,31 @@ export const MOODS = {
 }
 
 export const PETS = {
-  cat: { name: 'Gato' },
-  dog: { name: 'Cachorro' },
-  bunny: { name: 'Coelho' },
-  chick: { name: 'Pintinho' },
-  parrot: { name: 'Papagaio' },
-  penguin: { name: 'Pinguim' },
-  pig: { name: 'Porco' },
-  hog: { name: 'Javali' },
-  cow: { name: 'Vaca' },
-  deer: { name: 'Cervo' },
-  fox: { name: 'Raposa' },
-  beaver: { name: 'Castor' },
-  koala: { name: 'Coala' },
-  panda: { name: 'Panda' },
-  polar: { name: 'Urso' },
-  monkey: { name: 'Macaco' },
-  lion: { name: 'Leão' },
-  tiger: { name: 'Tigre' },
-  elephant: { name: 'Elefante' },
-  giraffe: { name: 'Girafa' },
-  crab: { name: 'Caranguejo' },
-  fish: { name: 'Peixe' },
-  bee: { name: 'Abelha' },
-  caterpillar: { name: 'Lagarta' },
+  cat:         { name: 'Gato' },
+  dog:         { name: 'Cachorro' },
+  bunny:       { name: 'Coelho' },
+  chick:       { name: 'Pintinho' },
+  parrot:      { name: 'Papagaio' },
+  penguin:     { name: 'Pinguim' },
+  pig:         { name: 'Porco' },
+  cow:         { name: 'Vaca' },
+  fox:         { name: 'Raposa' },
+  crab:        { name: 'Caranguejo' },
+  fish:        { name: 'Peixe' },
+  // Pets exóticos: desbloqueados por metas diárias e metas globais
+  beaver:      { name: 'Castor',    exotic: true, goalsCount: 3 },
+  bee:         { name: 'Abelha',    exotic: true, goalsCount: 6 },
+  caterpillar: { name: 'Lagarta',   exotic: true, goalsCount: 10 },
+  deer:        { name: 'Cervo',     exotic: true, goal: 'custom_1' },
+  hog:         { name: 'Javali',    exotic: true, goal: 'serve_1' },
+  koala:       { name: 'Coala',     exotic: true, goal: 'money_1' },
+  monkey:      { name: 'Macaco',    exotic: true, goal: 'custom_2' },
+  panda:       { name: 'Panda',     exotic: true, goal: 'serve_2' },
+  polar:       { name: 'Urso Polar', exotic: true, goal: 'money_2' },
+  tiger:       { name: 'Tigre',     exotic: true, goal: 'branch_1' },
+  lion:        { name: 'Leão',      exotic: true, goal: 'money_3' },
+  elephant:    { name: 'Elefante',  exotic: true, goal: 'custom_3' },
+  giraffe:     { name: 'Girafa',    exotic: true, goal: 'serve_3' },
 }
 
 // móveis decorativos que podem ser mudados de lugar no modo layout
@@ -194,19 +204,19 @@ export const DECOR = {
   column:    { name: 'coluna', price: 70 },
   bottles:   { name: 'retorno de garrafas', price: 80 },
   mannequin: { name: 'manequim', price: 90 },
-  gacha:     { name: 'máquina de brindes', price: 120 },
+  gacha:     { name: 'máquina de brindes', price: 120, goal: 'serve_1' },
   camera:    { name: 'câmera de segurança', price: 400, max: 1, desc: 'Impede 70% dos roubos sozinha' },
   alarm:     { name: 'alarme policial', price: 550, max: 1, wall: true, desc: 'Dispara sirene e impede 80% dos assaltos ao caixa' },
   cafeTable: { name: 'mesinha de café', price: 50 },
   ticket:    { name: 'máquina de tíquetes', price: 110 },
-  prizeWheel: { name: 'roda de prêmios', price: 130 },
+  prizeWheel: { name: 'roda de prêmios', price: 130, goal: 'money_1' },
   vending:   { name: 'máquina de salgadinhos', price: 150 },
-  arcade:    { name: 'fliperama', price: 200 },
-  pinball:   { name: 'pinball', price: 220 },
-  claw:      { name: 'máquina de garra', price: 240 },
-  basketball: { name: 'basquete de arcade', price: 260 },
-  airHockey: { name: 'aero hockey', price: 280 },
-  dance:     { name: 'máquina de dança', price: 320 },
+  arcade:    { name: 'fliperama', price: 200, goal: 'custom_1' },
+  pinball:   { name: 'pinball', price: 220, goal: 'serve_2' },
+  claw:      { name: 'máquina de garra', price: 240, goal: 'money_2' },
+  basketball: { name: 'basquete de arcade', price: 260, goal: 'branch_1' },
+  airHockey: { name: 'aero hockey', price: 280, goal: 'custom_3' },
+  dance:     { name: 'máquina de dança', price: 320, goal: 'custom_2' },
   // perk = só aparece para compra depois da melhoria de carreira correspondente
   lamp:      { name: 'abajur', price: 90, perk: 'lights', desc: 'Atrai clientes à noite (18h–21h)' },
   led:       { name: 'fita LED', price: 70, perk: 'lights', desc: 'Atrai clientes à noite (18h–21h)' },
@@ -338,6 +348,16 @@ export const TECH = { serviceBase: 20, servicePerWear: 0.4, repair: 110, service
 // chances por cliente: enter = pegadas na entrada, spill = algo derramado na prateleira, crumbs = farelo na cafeteria
 export const DIRT = { enter: 0.06, spill: 0.015, crumbs: 0.08, max: 30, full: 22, spawn: 0.25, feel: 0.3, rep: 0.008, clean: 1.0 }
 export const DOORMAT = { price: 80, dirt: 0.35, maxText: 20, colors: ['#ef8a77', '#6fb3a8', '#f2c25b', '#5b4a6e', '#7fa6c9', '#8a6a4a'] }
+export const WALLPAPERS = [
+  { id: 'solid', name: 'Liso Clássico', icon: '🎨' },
+  { id: 'stripes', name: 'Listras Boutique', icon: '💈' },
+  { id: 'brick', name: 'Tijolinho Retrô', icon: '🧱' },
+  { id: 'tiles', name: 'Azulejo Xadrez', icon: '🏁' },
+  { id: 'wood', name: 'Painel Ripado', icon: '🪵' },
+  { id: 'stars', name: 'Estrelado Lo-Fi', icon: '✨' },
+]
+export const WALL_COLORS = ['#f2dcc0', '#f4c7c3', '#cde5d9', '#cbe0f0', '#ddd3ee', '#f3dfad', '#dfa894', '#4f5565']
+export const TRIM_COLORS = ['#b98a5a', '#7c5836', '#f4efe6', '#3b2f4a', '#5a968b']
 
 // ---------- validade dos produtos (em dias) ----------
 export const SHELF_LIFE_SECTION = { produce: 3, bakery: 3, meat: 4, drink: 6, grocery: 10 }
@@ -358,7 +378,8 @@ export const GAME_MODES = {
   },
   hardcore: {
     id: 'hardcore', name: 'Modo Hardcore', emoji: '🔥',
-    desc: 'Desafio máximo: clientes exigentes, assaltos frequentes, multa sanitária por produtos vencidos, custos +25% e +50% XP.',
+    startMoney: 300,
+    desc: 'Desafio máximo: começa com R$ 300, clientes exigentes, assaltos frequentes, multa sanitária por produtos vencidos, custos +25% e +50% XP.',
     dirt: 1.4, freezerWear: 1.35, patience: 0.75, willing: 0.92, wageMult: 1.25, xpMult: 1.5, thieves: true, robberies: true, expiration: true,
   },
 }
