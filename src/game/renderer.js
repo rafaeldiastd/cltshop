@@ -1126,13 +1126,16 @@ export class Renderer {
     } else {
       const { cols, rows } = game.plan, np = nextPlan(b), sr = stockRoom(np)
       const x0 = -0.5 - b.w, x1 = cols - 0.5 + b.e, z0 = -0.5 - b.n, z1 = rows - 0.5 + b.s
-      const [west, east, back, front] = this.buildFloor
-      area(west, x0, z0, -0.5, z1); area(east, cols - 0.5, z0, x1, z1); area(back, -0.5, z0, cols - 0.5, -0.5); area(front, -0.5, rows - 0.5, cols - 0.5, z1)
+      area(this.buildFloor[0], x0, z0, x1, z1)
+      for (const m of this.buildFloor.slice(1)) m.visible = false
       area(this.buildRoom, sr.x0 - 0.5 - b.w, sr.z0 - 0.5 - b.n, sr.x1 - 0.5 - b.w, sr.z1 - 0.5 - b.n)
       const midX = (x0 + x1) / 2, midZ = (z0 + z1) / 2
+      const scx = (sr.x0 + sr.x1 - 1) / 2 - b.w, scz = (sr.z0 + sr.z1 - 1) / 2 - b.n
+      const sEdgeX = (sr.corner === 'ne' || sr.corner === 'se' ? sr.x0 - 0.5 : sr.x1 - 0.5) - b.w
+      const sEdgeZ = (sr.corner === 'sw' || sr.corner === 'se' ? sr.z0 - 0.5 : sr.z1 - 0.5) - b.n
       list = [
         ['w', x0 - 0.6, midZ], ['e', x1 + 0.6, midZ], ['n', midX, z0 - 0.6], ['s', midX, z1 + 0.6],
-        ['stockCols', sr.x1 - 0.5 - b.w, (sr.z0 + sr.z1 - 1) / 2 - b.n], ['stockRows', (sr.x0 + sr.x1 - 1) / 2 - b.w, sr.z1 - 0.5 - b.n],
+        ['stockCols', sEdgeX, scz], ['stockRows', scx, sEdgeZ],
       ]
     }
     list = list.map(([wall, x, z]) => {
