@@ -1,6 +1,6 @@
 // Multiplayer em tempo real: visitas entre lojas via Supabase (Realtime + store_directory) e canal local (BroadcastChannel + localStorage).
 import { reactive, watch } from 'vue'
-import { game, ui, settings, hooks, toast, money, save, uid, gainXp, nextTipCost, nextTipXp, MAX_TIPS, tipsLeft, logVisitorAction, mergeArcadeScores, defaultShopStyle } from './state.js'
+import { game, ui, settings, hooks, toast, money, save, uid, gainXp, nextTipCost, nextTipXp, MAX_TIPS, tipsLeft, logVisitorAction, mergeArcadeScores, defaultShopStyle, getActiveSaveId } from './state.js'
 import { sb, cloud } from './cloud.js'
 import { doorTile } from './layout.js'
 import { sfx } from './audio.js'
@@ -73,7 +73,7 @@ const snap = (v) => JSON.parse(JSON.stringify(v))
 try { localStorage.removeItem(DIR_KEY) } catch (e) { /* ignore */ }
 
 async function publishToSupabase(force = false) {
-  if (!sb || mp.visiting || pendingVisit) return
+  if (!sb || mp.visiting || pendingVisit || !getActiveSaveId() || !mp.openToVisitors) return
   const now = Date.now()
   if (!force && now - lastSupaPush < 6000) return
   lastSupaPush = now
@@ -596,13 +596,33 @@ export function stopMultiplayer() {
   if (bc) { bc.close(); bc = null }
 }
 
+export async function deleteOnlineStore(code = mp.myCode) {
+  if (code) {
+    dirLobby.delete(code)
+    supaLobby = supaLobby.filter((s) => s.code !== code)
+    refreshOnlineList(false)
+  } else {
+    mp.openToVisitors = false
+  }
+  if (!sb) return
+  try {
+    const { data: { session } } = await sb.auth.getSession()
+    if (!session?.user?.id) return
+    if (code) await sb.from('store_directory').delete().eq('user_id', session.user.id).eq('code', code)
+    else await sb.from('store_directory').delete().eq('user_id', session.user.id)
+  } catch (e) { /* ignore */ }
+}
+hooks.deleteOnlineStore = (code) => deleteOnlineStore(code)
+
 export function toggleOpenToVisitors() {
   mp.openToVisitors = !mp.openToVisitors
   if (!mp.openToVisitors && !mp.visiting) {
     sendRoomMsg({ type: 'leave', hostClosed: true })
     mp.visitors = []
+    deleteOnlineStore(mp.myCode)
+  } else {
+    publishToSupabase(true)
   }
-  publishToSupabase(true)
   announceLobby()
 }
 

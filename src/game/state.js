@@ -903,6 +903,7 @@ export function refreshSavesList() {
   if (!list.length && rawLegacy) {
     try {
       const d = JSON.parse(rawLegacy)
+      if (!d || d._deleted) { savesList.splice(0, savesList.length); return savesList }
       const id = 'save_main'
       localStorage.setItem(slotKey(id), rawLegacy)
       setActiveSaveId(id)
@@ -962,6 +963,7 @@ export function save() {
       id: sid,
       playerName: game.playerName || settings.playerName || 'Lojista',
       shopName: game.shopName || game.branchName || settings.storeName || 'Lojinha Lofi',
+      storeCode: settings.storeCode || '',
       mode: game.mode || 'normal',
       day: game.day || 1,
       money: game.money ?? 0,
@@ -994,7 +996,9 @@ export function load() {
       raw = slotRaw
     }
     if (!raw) return false
-    const { cart, log, _rev, ...d } = JSON.parse(raw)
+    const parsed = JSON.parse(raw)
+    if (!parsed || parsed._deleted) return false
+    const { cart, log, _rev, ...d } = parsed
     // saves de versões anteriores não têm os campos novos: entram os valores padrão
     Object.assign(game, { market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {}, plan: basePlan(d.level || 0), career: newCareer(), recipes: {}, orders: [], zapOn: true, team: [], candidates: [], pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null, mode: 'normal', pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: 'Matriz', branches: [], lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0, dayUnlocked: {}, expiryPriceMemory: {}, visitorLog: [] }, d, { speed: 1, paused: false })
     if (game.plan && game.plan.built == null) game.plan.built = true
@@ -1222,6 +1226,7 @@ export function deleteSaveSlot(sid) {
   const nextList = list.filter((x) => x.id !== sid)
   try { localStorage.removeItem(slotKey(sid)) } catch (e) { /* ignore */ }
   writeSavesIndex(nextList)
+  hooks.deleteOnlineStore?.(target.storeCode || (sid === getActiveSaveId() ? settings.storeCode : ''))
   if (getActiveSaveId() === sid) {
     if (nextList.length > 0) {
       loadSaveSlot(nextList[0].id)
@@ -1229,6 +1234,10 @@ export function deleteSaveSlot(sid) {
     } else {
       setActiveSaveId('')
       wipeSave()
+      rev = Math.max(rev, localRev()) + 1
+      try { localStorage.setItem(REV_KEY, String(rev)) } catch (e) { /* ignore */ }
+      hooks.clearCloudSave?.(rev)
+      hooks.deleteOnlineStore?.('')
       ui.modal = 'start'
     }
   }

@@ -48,7 +48,7 @@ function onClaim(row) {
   claimed = true
   cloud.status = 'online'
   const r = Number(row?.rev) || 0
-  if (r > localRev() && row?.data) {
+  if (r > localRev() && row?.data && !row.data._deleted) {
     // a nuvem está à frente (outro aparelho jogou): antes de começar, ela vira o save local;
     // com o jogo já rodando (conexão demorou), para tudo e pede para recarregar
     if (!started) replaceLocalSave(row.data, r)
@@ -56,6 +56,13 @@ function onClaim(row) {
     return
   }
   if (started) save()
+}
+
+hooks.clearCloudSave = (rev) => {
+  if (!sb || !claimed || !token) return
+  pending = null
+  clearTimeout(timer)
+  post({ json: '{"_deleted":true}', rev, day: 1 }, true).catch(() => {})
 }
 
 function fail() {

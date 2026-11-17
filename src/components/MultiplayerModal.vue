@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { PhCopy, PhGlobe, PhSignIn, PhStorefront, PhUsersThree, PhCheck, PhArrowClockwise, PhClockCounterClockwise } from '@phosphor-icons/vue'
 import Modal from './Modal.vue'
 import { game, ui, regionOf, toast, setPlayerName, setShopName } from '../game/state.js'
-import { mp, toggleOpenToVisitors, visitStore, fetchDirectoryStores } from '../game/multiplayer.js'
+import { mp, toggleOpenToVisitors, visitStore, fetchDirectoryStores, deleteOnlineStore } from '../game/multiplayer.js'
 import { LEVELS } from '../game/config.js'
 
 const codeInput = ref('')
@@ -67,6 +67,13 @@ function goVisit() {
           </div>
           <button class="btn sm" :class="{ good: mp.openToVisitors }" @click="toggleOpenToVisitors">
             {{ mp.openToVisitors ? '🟢 Aberta a visitas' : '🔴 Visitas fechadas' }}
+          </button>
+          <button
+            class="btn sm danger"
+            title="Remove sua loja do diretório online para outros jogadores"
+            @click="mp.openToVisitors = false; deleteOnlineStore(mp.myCode); toast('🗑️ Loja removida da lista online!', 'info')"
+          >
+            🗑️ Remover online
           </button>
         </div>
       </section>

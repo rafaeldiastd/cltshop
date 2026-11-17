@@ -260,6 +260,8 @@ class World {
     if (reg) {
       this.blocked.add(key(reg.x, reg.z))
       this.queueTiles = queueTiles(game.plan, reg, this.blocked) || Array(4).fill(shelfAccess(reg))
+    } else {
+      this.queueTiles = []
     }
     if (game.dirt.length) game.dirt = game.dirt.filter((d) => this.walkable(d.x, d.z) && d.z < this.d.rows)
     // quem ficou em cima de um móvel novo ou de uma parede nova é colocado no lugar livre mais próximo
@@ -463,6 +465,7 @@ class World {
     }
   }
   cmdServe() {
+    if (!game.register) return
     const r = game.register, c = cashierTile(r)
     this.cmd([go(c.x, c.z), call((p) => {
       p.cashiering = true
@@ -1874,18 +1877,20 @@ class World {
       }
     }
     // atendimento
-    const ct = cashierTile(game.register)
+    const ct = game.register ? cashierTile(game.register) : null
     const head = this.queue[0]
     const headReady = head && head.state === 'queued' && head.idle && head.qIdx === 0
     let rate = 0
     let playerServing = false
     for (const a of this.staff) a.serving = false
-    for (const a of [this.player, ...this.staff.filter((s) => s.role === 'cashier')]) {
-      const dist = Math.hypot(a.x - ct.x, a.z - ct.z)
-      const ok = a.kind === 'player' ? a.cashiering && dist < 2.3 && !a.moving : dist < 0.3 && a.idle
-      if (!ok) continue
-      if (a.kind === 'player') { rate += 1 / 1.1; playerServing = true }
-      else { rate += serveMult(a.member) / 1.7; a.serving = !!headReady }
+    if (ct) {
+      for (const a of [this.player, ...this.staff.filter((s) => s.role === 'cashier')]) {
+        const dist = Math.hypot(a.x - ct.x, a.z - ct.z)
+        const ok = a.kind === 'player' ? a.cashiering && dist < 2.3 && !a.moving : dist < 0.3 && a.idle
+        if (!ok) continue
+        if (a.kind === 'player') { rate += 1 / 1.1; playerServing = true }
+        else { rate += serveMult(a.member) / 1.7; a.serving = !!headReady }
+      }
     }
     if (headReady && rate > 0) {
       head.serve += dt * rate
@@ -1901,7 +1906,7 @@ class World {
     this.target = this.computeTarget()
     const prompt = this.target ? hoverText(this.target) : null
     if (prompt !== this._lastPrompt) { this._lastPrompt = prompt; ui.prompt = prompt }
-    if (this.player.cashiering && Math.hypot(this.player.x - ct.x, this.player.z - ct.z) > 2.6) this.player.cashiering = false
+    if (ct && this.player.cashiering && Math.hypot(this.player.x - ct.x, this.player.z - ct.z) > 2.6) this.player.cashiering = false
     ui.action = this.player.work ? { ...this.player.work } : null
   }
 }
