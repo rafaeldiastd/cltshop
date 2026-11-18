@@ -6,8 +6,8 @@ import { game, ui, money, settings, daySeconds, modeMods, hooks, effectiveShelfP
 import { world } from './world.js'
 import { PID, FREEZER, DECOR } from './config.js'
 import { roleName } from './people.js'
-import { dims, boxSlots, stockRoom, onFloor, isUsable, isArcade, backPartner, elbowOf, DIRS, planKey } from './layout.js'
-import { nextPlan } from './build.js'
+import { dims, boxSlots, stockRoom, onFloor, isUsable, isArcade, backPartner, elbowOf, DIRS, planKey, isGridPlan, planCell, findMainDoors, edgeKey } from './layout.js'
+import { paintCell, paintEdge, beginBuildStroke, selectAt, selHandles, runKeys } from './build.js'
 import * as assets from './assets.js'
 import { makeAvatar } from './avatar.js'
 import { setThumbMaker } from './thumbs.js'
@@ -192,6 +192,8 @@ export class Renderer {
     this.initTags()
     hooks.rebuildShop = () => { this.builtKey = ''; this.buildShop() }
     hooks.syncFacadeSign = () => this.updateFacadeSign()
+    hooks.rotateCam = (dir) => this.rotateCamera(dir)
+    hooks.zoomCam = (dir) => this.zoomCamera(dir)
     setThumbMaker((key) => this.makeBuildModel(key))
     addEventListener('resize', () => this.resize())
     this.resize()
@@ -295,8 +297,8 @@ export class Renderer {
   buildShop() {
     if (this.staticG) this.scene.remove(this.staticG)
     const g = (this.staticG = new THREE.Group())
-    this.lamps = []
     this.doors = []
+    this.cutawayWalls = []
     this.signKey = null
     const { cols, rows, doorX } = dims(game.plan)
     this.builtKey = planKey(game.plan)
@@ -323,6 +325,7 @@ export class Renderer {
         g.add(box(0.14, 0.45, 0.14, 0xb98a5a, sx, 0.225, sz))
       }
       this.gridG = null
+      this.floorG = null; this.structG = null
       this.matKey = null
       bakeChildren(g)
       this.scenery.build({ cols, rows, doorX })
@@ -332,17 +335,39 @@ export class Renderer {
       return
     }
 
-    // chão com tijolinhos de madeira (estende até a parede da frente em z = rows)
-    const cv = document.createElement('canvas'); cv.width = cols * 64; cv.height = rows * 64 + 32
-    const x = cv.getContext('2d')
-    for (let i = 0; i < cols; i++) for (let j = 0; j < rows + 1; j++) {
-      x.fillStyle = (i + j) % 2 ? '#e6c9a0' : '#dcbb8e'; x.fillRect(i * 64, j * 64, 64, 64)
-      x.strokeStyle = 'rgba(120,80,40,0.18)'; x.strokeRect(i * 64 + 1, j * 64 + 1, 62, 62)
+    // piso (F) e estrutura (S: paredes, janelas, portas) ficam em grupos próprios: na aba Construção somem e o rascunho aparece no lugar
+    const F = (this.floorG = new THREE.Group()), S = (this.structG = new THREE.Group())
+    g.add(F, S)
+    // chão com tijolinhos de madeira (ou grade livre quando construído por blocos)
+    const isGrid = isGridPlan(game.plan)
+    if (isGrid) {
+      const lot = new THREE.Mesh(new THREE.PlaneGeometry(cols, rows + 0.5), std(0x9fc282, { roughness: 0.95 }))
+      lot.rotation.x = -Math.PI / 2; lot.position.set(cols / 2 - 0.5, 0.004, rows / 2 - 0.25); lot.receiveShadow = true
+      g.add(lot)
+      for (let iz = 0; iz < rows; iz++) {
+        for (let ix = 0; ix < cols; ix++) {
+          const ch = planCell(game.plan, ix, iz)
+          if (ch === 's') {
+            const tile = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), std((ix + iz) % 2 ? 0xe6c9a0 : 0xdcbb8e, { roughness: 0.9 }))
+            tile.rotation.x = -Math.PI / 2; tile.position.set(ix, 0.01, iz); tile.receiveShadow = true; F.add(tile)
+          } else if (ch === 'k') {
+            const tile = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), std(0xb7c9b0, { roughness: 0.9 }))
+            tile.rotation.x = -Math.PI / 2; tile.position.set(ix, 0.012, iz); tile.receiveShadow = true; F.add(tile)
+          }
+        }
+      }
+    } else {
+      const cv = document.createElement('canvas'); cv.width = cols * 64; cv.height = rows * 64 + 32
+      const x = cv.getContext('2d')
+      for (let i = 0; i < cols; i++) for (let j = 0; j < rows + 1; j++) {
+        x.fillStyle = (i + j) % 2 ? '#e6c9a0' : '#dcbb8e'; x.fillRect(i * 64, j * 64, 64, 64)
+        x.strokeStyle = 'rgba(120,80,40,0.18)'; x.strokeRect(i * 64 + 1, j * 64 + 1, 62, 62)
+      }
+      const ft = new THREE.CanvasTexture(cv); ft.colorSpace = THREE.SRGBColorSpace; ft.anisotropy = 4
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(cols, rows + 0.5), new THREE.MeshStandardMaterial({ map: ft, roughness: 0.9 }))
+      floor.rotation.x = -Math.PI / 2; floor.position.set(cols / 2 - 0.5, 0, rows / 2 - 0.25); floor.receiveShadow = true
+      F.add(floor)
     }
-    const ft = new THREE.CanvasTexture(cv); ft.colorSpace = THREE.SRGBColorSpace; ft.anisotropy = 4
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(cols, rows + 0.5), new THREE.MeshStandardMaterial({ map: ft, roughness: 0.9 }))
-    floor.rotation.x = -Math.PI / 2; floor.position.set(cols / 2 - 0.5, 0, rows / 2 - 0.25); floor.receiveShadow = true
-    g.add(floor)
 
     // grade do modo layout
     const pts = []
@@ -422,78 +447,182 @@ export class Renderer {
       m.position.set(x, y, z); m.castShadow = !isTrans; m.receiveShadow = true
       return m
     }
-    const addWall = (w, h, d, x, y, z) => { const m = wallBox(w, h, d, x, y, z); if (m) g.add(m) }
+    const addWall = (w, h, d, x, y, z) => { const m = wallBox(w, h, d, x, y, z); if (m) S.add(m) }
 
-    // sala do estoque: suporta qualquer um dos 4 cantos (nw, ne, sw, se)
+    const wallH = wallMode === 'none' ? 0.08 : 2.4
     const room = stockRoom(game.plan)
-    const roomFloor = new THREE.Mesh(new THREE.PlaneGeometry(room.cols, room.rows), std(0xb7c9b0))
-    roomFloor.rotation.x = -Math.PI / 2
-    roomFloor.position.set((room.x0 + room.x1 - 1) / 2, 0.012, (room.z0 + room.z1 - 1) / 2)
-    roomFloor.receiveShadow = true; g.add(roomFloor)
-    const H = 0.85, T = 0.14
-    const roomWall = (x0, z0, x1, z1) => {
-      const w = Math.abs(x1 - x0) || T, d = Math.abs(z1 - z0) || T, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2
-      if (wallMode !== 'none') {
-        addWall(w, H, d, cx, H / 2, cz)
-        g.add(box(w + 0.05, 0.07, d + 0.05, trim, cx, H + 0.035, cz))
-      } else {
-        g.add(box(w + 0.05, 0.07, d + 0.05, trim, cx, 0.035, cz))
-      }
+    const cutG = new THREE.Group()
+    S.add(cutG)
+    const addCutWall = (nx, nz, fn) => {
+      const cg = new THREE.Group()
+      fn(cg)
+      cutG.add(cg)
+      this.cutawayWalls.push({ obj: cg, nx, nz })
+      return cg
     }
-    const dz = room.door.z
-    const rxStart = room.x0 - 0.5, rxEnd = room.x1 - 0.5
-    const rzStart = room.z0 - 0.5, rzEnd = room.z1 - 0.5
-    roomWall(rxStart, room.wallZ, rxEnd, room.wallZ)
-    if (dz - 0.5 > rzStart + 0.01) roomWall(room.wallX, rzStart, room.wallX, dz - 0.5)
-    if (dz + 0.5 < rzEnd - 0.01) roomWall(room.wallX, dz + 0.5, room.wallX, rzEnd)
-    for (const s of [-0.5, 0.5]) g.add(box(0.14, 1.45, 0.14, trim, room.wallX, 0.725, dz + s))
-    g.add(box(0.14, 0.1, 1.14, trim, room.wallX, 1.5, dz))
-    this.addDoor(g, room.wallX, dz - 0.44, 'z', 0.88, 1.35, 0xd9b48a, 1.7, (a) => a.kind === 'player' || a.role === 'stocker') // cliente passando por perto não abre
 
-    const wallH = wallMode === 'full' || wallMode === 'transparent' ? 2.4 : 0.08
-    const frontH = wallMode === 'full' ? 2.4 : wallMode === 'transparent' ? 2.4 : 0.08
-    addWall(cols + 0.4, wallH, 0.2, cols / 2 - 0.5, wallH / 2, -0.6)
-    addWall(0.2, wallH, rows + 0.85, -0.6, wallH / 2, (rows - 0.55) / 2)
-    g.add(box(cols + 0.4, 0.12, 0.26, trim, cols / 2 - 0.5, 0.06, -0.52))
-    g.add(box(0.26, 0.12, rows + 0.85, trim, -0.52, 0.06, (rows - 0.55) / 2))
-    for (const [x0, x1] of [[-0.7, doorX - 0.5], [doorX + 0.5, cols - 0.3]]) {
-      const w = x1 - x0
-      if (w > 0.05) {
-        addWall(w, frontH, 0.3, (x0 + x1) / 2, frontH / 2, rows)
-        g.add(box(w, 0.08, 0.36, trim, (x0 + x1) / 2, wallMode === 'none' ? 0.04 : frontH + 0.04, rows))
+    if (isGrid) {
+      const mainDoor = findMainDoors(game.plan)[0]
+      const glassMat = new THREE.MeshStandardMaterial({ color: 0xbfe3ee, transparent: true, opacity: 0.36, roughness: 0.15, emissive: new THREE.Color(0x2d5360) })
+      this.doorG = null; this.doorSign = null; this.facadeSign = null; this.facadeSignBack = null
+      for (const [ek, kind] of Object.entries(game.plan.edges || {})) {
+        const [xs, zs, dir] = ek.split(',')
+        const ex = Number(xs), ez = Number(zs), horiz = dir === 'h'
+        const cx = horiz ? ex : ex - 0.5
+        const cz = horiz ? ez - 0.5 : ez
+        const w = horiz ? 1.12 : 0.2
+        const d = horiz ? 0.2 : 1.12
+        const isMain = mainDoor && ek === mainDoor.key
+        const cA = horiz ? planCell(game.plan, ex, ez - 1) : planCell(game.plan, ex - 1, ez)
+        const cB = planCell(game.plan, ex, ez)
+        let nx = 0, nz = 0
+        if (cA !== '.' && cB === '.') { if (horiz) nz = 1; else nx = 1 }
+        else if (cA === '.' && cB !== '.') { if (horiz) nz = -1; else nx = -1 }
+        const isExt = nx !== 0 || nz !== 0
+        const put = (target, m) => { if (m) target.add(m) }
+        const h = wallH
+        const renderEdge = (target) => {
+          if (kind === 'wall') {
+            put(target, wallBox(w, h, d, cx, h / 2, cz))
+            if (!isTrans) target.add(box(w + 0.04, 0.08, d + 0.04, trim, cx, wallMode === 'none' ? 0.04 : h + 0.04, cz))
+          } else if (kind === 'window') {
+            if (wallMode !== 'none') {
+              put(target, wallBox(w, 0.72, d, cx, 0.36, cz))
+              if (!isTrans) {
+                target.add(box(w + 0.02, 0.08, d + 0.02, trim, cx, 0.76, cz))
+                target.add(box(w + 0.02, 0.14, d + 0.02, trim, cx, 1.94, cz))
+              }
+              if (h > 2.02) {
+                put(target, wallBox(w, h - 2.01, d, cx, 2.01 + (h - 2.01) / 2, cz))
+                if (!isTrans) target.add(box(w + 0.04, 0.08, d + 0.04, trim, cx, h + 0.04, cz))
+              }
+              for (const s of [-0.46, 0.46]) {
+                target.add(box(horiz ? 0.08 : 0.22, 1.1, horiz ? 0.22 : 0.08, trim, horiz ? cx + s : cx, 1.34, horiz ? cz : cz + s))
+              }
+              const pane = new THREE.Mesh(new THREE.BoxGeometry(horiz ? 0.88 : 0.06, 1.08, horiz ? 0.06 : 0.88), glassMat)
+              pane.position.set(cx, 1.34, cz); target.add(pane)
+            } else {
+              target.add(box(w + 0.04, 0.08, d + 0.04, trim, cx, 0.04, cz))
+            }
+          } else if (kind === 'door') {
+            const targetG = isMain ? (this.doorG = new THREE.Group()) : target
+            if (isMain) targetG.userData = { kind: 'door' }
+            if (wallMode !== 'none' && h > 1.52) {
+              put(target, wallBox(w, h - 1.5, d, cx, 1.5 + (h - 1.5) / 2, cz))
+              if (!isTrans) target.add(box(w + 0.04, 0.08, d + 0.04, trim, cx, h + 0.04, cz))
+            }
+            for (const s of [-0.45, 0.45]) {
+              targetG.add(box(0.12, 1.4, 0.26, trim, horiz ? cx + s : cx, 0.7, horiz ? cz : cz + s))
+            }
+            targetG.add(box(horiz ? 1.06 : 0.28, 0.12, horiz ? 0.28 : 1.06, trim, cx, 1.44, cz))
+            this.addDoor(
+              targetG,
+              horiz ? cx - 0.43 : cx,
+              horiz ? cz : cz - 0.43,
+              horiz ? 'x' : 'z',
+              0.86, 1.3,
+              isMain ? 0x6fb3a8 : 0xd9b48a,
+              isMain ? -1.7 : 1.7,
+              isMain ? () => true : (a) => a.kind === 'player' || a.role === 'stocker',
+            )
+            if (isMain) {
+              const dh = box(1.2, 2.1, 0.5, trim, cx, 1.05, cz); dh.visible = false; targetG.add(dh); targetG.userData.hit = dh
+              this.doorSign = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.13), new THREE.MeshBasicMaterial({ map: tagTex('FECHADO', '#c7c2cc'), toneMapped: false }))
+              this.doorSign.position.set(cx + (horiz ? 0.72 : 0), 0.32, cz + (horiz ? 0.17 : 0.72)); targetG.add(this.doorSign)
+              S.add(targetG)
+              let s0 = horiz ? ex : ez, s1 = horiz ? ex : ez
+              while (game.plan.edges?.[horiz ? `${s0 - 1},${ez},h` : `${ex},${s0 - 1},v`]) s0--
+              while (game.plan.edges?.[horiz ? `${s1 + 1},${ez},h` : `${ex},${s1 + 1},v`]) s1++
+              const spanMin = s0 - 0.5, spanMax = s1 + 0.5
+              const maxW = Math.min(2.5, Math.max(0.85, spanMax - spanMin - 0.3))
+              const center = Math.max(spanMin + maxW / 2 + 0.15, Math.min(spanMax - maxW / 2 - 0.15, horiz ? cx : cz))
+              this.facadeSignMaxW = maxW
+              this.facadeSign = this.makeExtrudedSign(maxW)
+              if (horiz) {
+                this.facadeSign.position.set(center, 1.92, cz + (nz >= 0 ? 0.12 : -0.12))
+                if (nz < 0) this.facadeSign.rotation.y = Math.PI
+              } else {
+                this.facadeSign.position.set(cx + (nx >= 0 ? 0.12 : -0.12), 1.92, center)
+                this.facadeSign.rotation.y = nx >= 0 ? Math.PI / 2 : -Math.PI / 2
+              }
+              target.add(this.facadeSign)
+            }
+          }
+        }
+        if (isExt) addCutWall(nx, nz, renderEdge)
+        else renderEdge(S)
       }
-    }
-    addWall(0.2, frontH, rows + 0.85, cols - 0.4, frontH / 2, (rows - 0.55) / 2)
-    g.add(box(0.26, 0.08, rows + 0.88, trim, cols - 0.4, wallMode === 'none' ? 0.04 : frontH + 0.04, (rows - 0.55) / 2))
-    // porta da loja: é aqui que se abre o dia
-    const doorG = (this.doorG = new THREE.Group()); doorG.userData = { kind: 'door' }
-    for (const dx of [-0.5, 0.5]) doorG.add(box(0.14, 1.4, 0.34, trim, doorX + dx, 0.7, rows))
-    doorG.add(box(1.14, 0.12, 0.36, trim, doorX, 1.44, rows))
-    this.addDoor(doorG, doorX - 0.43, rows, 'x', 0.86, 1.3, 0x6fb3a8, -1.7)
-    const doorHit = box(1.2, 2.1, 0.5, trim, doorX, 1.05, rows); doorHit.visible = false; doorG.add(doorHit); doorG.userData.hit = doorHit
-    // plaquinha na mureta ao lado da porta: verde com a loja aberta, cinza fechada
-    this.doorSign = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.13), new THREE.MeshBasicMaterial({ map: tagTex('FECHADO', '#c7c2cc'), toneMapped: false }))
-    this.doorSign.position.set(doorX + 0.86, 0.32, rows + 0.17); doorG.add(this.doorSign)
-    doorG.add(box(0.46, 0.17, 0.02, 0x3b2f4a, doorX + 0.86, 0.32, rows + 0.155))
-    g.add(doorG)
+    } else {
+      // sala do estoque: suporta qualquer um dos 4 cantos (nw, ne, sw, se)
+      const roomFloor = new THREE.Mesh(new THREE.PlaneGeometry(room.cols, room.rows), std(0xb7c9b0))
+      roomFloor.rotation.x = -Math.PI / 2
+      roomFloor.position.set((room.x0 + room.x1 - 1) / 2, 0.012, (room.z0 + room.z1 - 1) / 2)
+      roomFloor.receiveShadow = true; F.add(roomFloor)
+      const H = wallH, T = 0.14
+      const roomWall = (x0, z0, x1, z1) => {
+        const w = Math.abs(x1 - x0) || T, d = Math.abs(z1 - z0) || T, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2
+        if (wallMode !== 'none') {
+          addWall(w, H, d, cx, H / 2, cz)
+          if (!isTrans) S.add(box(w + 0.05, 0.07, d + 0.05, trim, cx, H + 0.035, cz))
+        } else {
+          S.add(box(w + 0.05, 0.07, d + 0.05, trim, cx, 0.035, cz))
+        }
+      }
+      const dz = room.door.z
+      const rxStart = room.x0 - 0.5, rxEnd = room.x1 - 0.5
+      const rzStart = room.z0 - 0.5, rzEnd = room.z1 - 0.5
+      roomWall(rxStart, room.wallZ, rxEnd, room.wallZ)
+      if (dz - 0.5 > rzStart + 0.01) roomWall(room.wallX, rzStart, room.wallX, dz - 0.5)
+      if (dz + 0.5 < rzEnd - 0.01) roomWall(room.wallX, dz + 0.5, room.wallX, rzEnd)
+      for (const s of [-0.5, 0.5]) S.add(box(0.14, 1.45, 0.14, trim, room.wallX, 0.725, dz + s))
+      S.add(box(0.14, 0.1, 1.14, trim, room.wallX, 1.5, dz))
+      this.addDoor(S, room.wallX, dz - 0.44, 'z', 0.88, 1.35, 0xd9b48a, 1.7, (a) => a.kind === 'player' || a.role === 'stocker')
 
-    // letreiro 3D na fachada acima da porta com o nome da loja
-    for (const dx of [-0.5, 0.5]) g.add(box(0.1, 0.24, 0.1, trim, doorX + dx, 1.56, rows))
-    g.add(box(2.34, 0.44, 0.16, trim, doorX, 1.76, rows))
-    const facadeMat = new THREE.MeshBasicMaterial({ map: this.makeFacadeTex(), toneMapped: false })
-    this.facadeSign = new THREE.Mesh(new THREE.PlaneGeometry(2.18, 0.34), facadeMat)
-    this.facadeSign.position.set(doorX, 1.76, rows + 0.085)
-    this.facadeSignBack = new THREE.Mesh(new THREE.PlaneGeometry(2.18, 0.34), facadeMat)
-    this.facadeSignBack.position.set(doorX, 1.76, rows - 0.085)
-    this.facadeSignBack.rotation.y = Math.PI
-    g.add(this.facadeSign, this.facadeSignBack)
-
-    // janelinha no fundo (só quando há paredes)
-    if (wallMode !== 'none') {
-      const win = box(1.8, 1.0, 0.05, 0xbfe3ee, 3.3, 1.35, -0.48)
-      win.material.emissive = new THREE.Color(0x3a6a7a)
-      if (isTrans) { win.material.transparent = true; win.material.opacity = 0.4 }
-      g.add(win)
+      addCutWall(0, -1, (cg) => {
+        const m = wallBox(cols + 0.4, wallH, 0.2, cols / 2 - 0.5, wallH / 2, -0.6); if (m) cg.add(m)
+        if (!isTrans) cg.add(box(cols + 0.4, 0.12, 0.26, trim, cols / 2 - 0.5, wallMode === 'none' ? 0.04 : wallH + 0.04, -0.52))
+        if (wallMode !== 'none') {
+          const win = box(1.8, 1.0, 0.05, 0xbfe3ee, 3.3, 1.35, -0.48)
+          win.material.emissive = new THREE.Color(0x3a6a7a)
+          if (isTrans) { win.material.transparent = true; win.material.opacity = 0.4 }
+          cg.add(win)
+        }
+      })
+      addCutWall(-1, 0, (cg) => {
+        const m = wallBox(0.2, wallH, rows + 0.85, -0.6, wallH / 2, (rows - 0.55) / 2); if (m) cg.add(m)
+        if (!isTrans) cg.add(box(0.26, 0.12, rows + 0.85, trim, -0.52, wallMode === 'none' ? 0.04 : wallH + 0.04, (rows - 0.55) / 2))
+      })
+      addCutWall(0, 1, (cg) => {
+        for (const [x0, x1] of [[-0.7, doorX - 0.5], [doorX + 0.5, cols - 0.3]]) {
+          const w = x1 - x0
+          if (w > 0.05) {
+            const m = wallBox(w, wallH, 0.3, (x0 + x1) / 2, wallH / 2, rows); if (m) cg.add(m)
+            if (!isTrans) cg.add(box(w, 0.08, 0.36, trim, (x0 + x1) / 2, wallMode === 'none' ? 0.04 : wallH + 0.04, rows))
+          }
+        }
+        const maxW = Math.min(2.6, Math.max(1.0, cols - 0.8))
+        const signCenter = Math.max(-0.5 + maxW / 2 + 0.15, Math.min(cols - 0.5 - maxW / 2 - 0.15, doorX))
+        this.facadeSignMaxW = maxW
+        this.facadeSign = this.makeExtrudedSign(maxW)
+        this.facadeSign.position.set(signCenter, 1.92, rows + 0.16)
+        this.facadeSignBack = null
+        cg.add(this.facadeSign)
+      })
+      addCutWall(1, 0, (cg) => {
+        const m = wallBox(0.2, wallH, rows + 0.85, cols - 0.4, wallH / 2, (rows - 0.55) / 2); if (m) cg.add(m)
+        if (!isTrans) cg.add(box(0.26, 0.08, rows + 0.88, trim, cols - 0.4, wallMode === 'none' ? 0.04 : wallH + 0.04, (rows - 0.55) / 2))
+      })
+      // porta da loja: é aqui que se abre o dia
+      const doorG = (this.doorG = new THREE.Group()); doorG.userData = { kind: 'door' }
+      for (const dx of [-0.5, 0.5]) doorG.add(box(0.14, 1.4, 0.34, trim, doorX + dx, 0.7, rows))
+      doorG.add(box(1.14, 0.12, 0.36, trim, doorX, 1.44, rows))
+      this.addDoor(doorG, doorX - 0.43, rows, 'x', 0.86, 1.3, 0x6fb3a8, -1.7)
+      const doorHit = box(1.2, 2.1, 0.5, trim, doorX, 1.05, rows); doorHit.visible = false; doorG.add(doorHit); doorG.userData.hit = doorHit
+      // plaquinha na mureta ao lado da porta: verde com a loja aberta, cinza fechada
+      this.doorSign = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.13), new THREE.MeshBasicMaterial({ map: tagTex('FECHADO', '#c7c2cc'), toneMapped: false }))
+      this.doorSign.position.set(doorX + 0.86, 0.32, rows + 0.17); doorG.add(this.doorSign)
+      doorG.add(box(0.46, 0.17, 0.02, 0x3b2f4a, doorX + 0.86, 0.32, rows + 0.155))
+      S.add(doorG)
     }
 
     // caixa: só a registradora, num pedestal de um lugar
@@ -513,17 +642,14 @@ export class Renderer {
     this.regLamp = { lamp, glow: lampGlow, key: null }
     g.add(counter); this.counterG = counter
 
-    // tapete decorativo
-    const rug = new THREE.Mesh(new THREE.CircleGeometry(1.1, 24), std(0xe8a598)); rug.rotation.x = -Math.PI / 2; rug.position.set(cols / 2 - 0.5, 0.012, rows / 2 - 0.5); rug.receiveShadow = true; g.add(rug)
-
-    // lâmpadas
-    for (const [lx, lz] of [[cols / 2 - 0.5, 1.5], [cols / 2 - 0.5, rows - 2.5]]) {
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffe9b0 })); bulb.position.set(lx, 2.2, lz)
-      const pl = new THREE.PointLight(0xffd9a0, 0, 9, 2); pl.position.set(lx, 2.0, lz)
-      g.add(bulb, pl); this.lamps.push(pl)
+    // tapete decorativo (só se o meio do terreno for piso da loja: nas plantas em grade ele pode cair no gramado)
+    if (onFloor(game.plan, Math.round(cols / 2 - 0.5), Math.round(rows / 2 - 0.5))) {
+      const rug = new THREE.Mesh(new THREE.CircleGeometry(1.1, 24), std(0xe8a598)); rug.rotation.x = -Math.PI / 2; rug.position.set(cols / 2 - 0.5, 0.012, rows / 2 - 0.5); rug.receiveShadow = true; g.add(rug)
     }
+    // as luminárias do teto agora são decoração (game.decor, tipo 'pendant'): o jogador escolhe onde ficam
     this.decorate(g, cols, rows, doorX)
     this.matKey = null
+    bakeChildren(F); bakeChildren(S)
     bakeChildren(g)
     this.scenery.build({ cols, rows, doorX })
     this.scene.add(g)
@@ -532,15 +658,10 @@ export class Renderer {
   }
 
   decorate(g, cols, rows, doorX) {
-    // lambri nas paredes (somente quando há paredes)
-    if ((game.shopStyle?.wallMode || 'full') !== 'none') {
-      g.add(box(cols + 0.4, 0.8, 0.24, 0xe3c4a0, cols / 2 - 0.5, 0.4, -0.6))
-      g.add(box(0.24, 0.8, rows + 0.85, 0xe3c4a0, -0.6, 0.4, (rows - 0.55) / 2))
-    }
-    // pendentes
-    for (const l of this.lamps) {
-      const cord = box(0.02, 0.5, 0.02, 0x3b2f4a, l.position.x, 2.45, l.position.z); const shade = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.22, 14, 1, true), new THREE.MeshStandardMaterial({ color: 0xef8a77, side: THREE.DoubleSide, roughness: 0.8 }))
-      shade.position.set(l.position.x, 2.3, l.position.z); g.add(cord, shade)
+    // lambri nas paredes (somente quando há paredes e planta clássica)
+    if (!isGridPlan(game.plan) && (game.shopStyle?.wallMode || 'full') !== 'none') {
+      this.structG.add(box(cols + 0.4, 0.8, 0.24, 0xe3c4a0, cols / 2 - 0.5, 0.4, -0.6))
+      this.structG.add(box(0.24, 0.8, rows + 0.85, 0xe3c4a0, -0.6, 0.4, (rows - 0.55) / 2))
     }
     // vitrines externas (a loja começa sem cestas nem móveis de decoração)
   }
@@ -890,6 +1011,18 @@ export class Renderer {
   makeDecorView(d) {
     const gr = new THREE.Group(); gr.userData = { kind: 'decor', id: d.id }
     let model = assets.make(d.type)
+    if (DECOR[d.type]?.ceiling) { // luminária pendente: fio, cúpula e lâmpada no alto, com a luz que acende à noite
+      model = new THREE.Group()
+      model.add(box(0.02, 0.5, 0.02, 0x3b2f4a, 0, 2.45, 0))
+      const shade = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.22, 14, 1, true), new THREE.MeshStandardMaterial({ color: 0xef8a77, side: THREE.DoubleSide, roughness: 0.8 }))
+      shade.position.y = 2.3; model.add(shade)
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffe9b0 })); bulb.position.y = 2.2; model.add(bulb)
+      const light = new THREE.PointLight(0xffd9a0, this.lampIntensity || 0, 9, 2); light.position.y = 2.0; model.add(light)
+      gr.userData.light = light; this.lamps.push(light)
+      gr.add(model); addHit(gr, 0.7, 0.7, 0.7, 2.3)
+      this.scene.add(gr)
+      return gr
+    }
     if (DECOR[d.type]?.wall) { // decoração de parede: relógio (com a hora do jogo) ou quadro
       model = new THREE.Group()
       if (d.type === 'clock') {
@@ -956,7 +1089,12 @@ export class Renderer {
   }
   syncDecor() {
     const alive = new Set(game.decor.map((d) => d.id))
-    for (const [id, gr] of this.decorViews) if (!alive.has(id)) { this.scene.remove(gr); this.decorViews.delete(id); if (gr.userData.clock) this.clocks = this.clocks.filter((c) => c !== gr.userData.clock) }
+    for (const [id, gr] of this.decorViews) {
+      if (alive.has(id)) continue
+      this.scene.remove(gr); this.decorViews.delete(id)
+      if (gr.userData.clock) this.clocks = this.clocks.filter((c) => c !== gr.userData.clock)
+      if (gr.userData.light) { this.lamps = this.lamps.filter((l) => l !== gr.userData.light); gr.userData.light.dispose() }
+    }
     for (const d of game.decor) {
       let gr = this.decorViews.get(d.id)
       if (!gr) { gr = this.makeDecorView(d); this.decorViews.set(d.id, gr) }
@@ -995,30 +1133,76 @@ export class Renderer {
       this.doorSign.material.map = tagTex(text, bg); this.doorSign.material.needsUpdate = true
     }
   }
-  makeFacadeTex() {
+  makeExtrudedSignGeo(maxW = 2.4) {
     const label = String(game.shopName || game.branchName || 'Lojinha Lofi').trim() || 'Lojinha Lofi'
-    const trim = game.shopStyle?.trimColor || '#b98a5a'
-    const c = document.createElement('canvas'); c.width = 512; c.height = 84
+    const c = document.createElement('canvas'); c.width = 256; c.height = 44
     const ctx = c.getContext('2d')
-    ctx.fillStyle = '#fff6e5'
-    ctx.fillRect(0, 0, 512, 84)
-    ctx.strokeStyle = trim
-    ctx.lineWidth = 8
-    ctx.strokeRect(4, 4, 504, 76)
-    ctx.fillStyle = '#3b2f4a'
-    const size = label.length > 18 ? 30 : label.length > 13 ? 36 : 42
-    ctx.font = `900 ${size}px ui-rounded, system-ui, sans-serif`
+    ctx.clearRect(0, 0, c.width, c.height)
+    ctx.fillStyle = '#ffffff'
+    let size = 30
+    do {
+      ctx.font = `900 ${size}px ui-rounded, system-ui, sans-serif`
+      size -= 2
+    } while (ctx.measureText(label).width > 240 && size > 14)
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    ctx.fillText(label, 256, 44, 476)
-    const t = new THREE.CanvasTexture(c)
-    t.colorSpace = THREE.SRGBColorSpace
-    return t
+    ctx.fillText(label, c.width / 2, c.height / 2, 244)
+    const { data, width, height } = ctx.getImageData(0, 0, c.width, c.height)
+    let minX = width, maxX = -1, minY = height, maxY = -1
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (data[(y * width + x) * 4 + 3] > 110) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x
+          if (y < minY) minY = y; if (y > maxY) maxY = y
+        }
+      }
+    }
+    if (maxX < minX) return new THREE.BoxGeometry(0.4, 0.15, 0.06)
+    const spanW = maxX - minX + 1, spanH = maxY - minY + 1
+    const scale = Math.min(maxW / spanW, 0.34 / spanH)
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2
+    const geos = []
+    for (let y = minY; y <= maxY; y++) {
+      let x = minX
+      while (x <= maxX) {
+        while (x <= maxX && data[(y * width + x) * 4 + 3] <= 110) x++
+        if (x > maxX) break
+        const x0 = x
+        while (x <= maxX && data[(y * width + x) * 4 + 3] > 110) x++
+        const rw = (x - x0) * scale
+        const bg = new THREE.BoxGeometry(rw, scale * 1.08, 0.075)
+        bg.translate(((x0 + x - 1) / 2 - cx) * scale, (cy - y) * scale, 0)
+        geos.push(bg)
+      }
+    }
+    if (!geos.length) return new THREE.BoxGeometry(0.4, 0.15, 0.06)
+    const merged = mergeGeometries(geos)
+    geos.forEach((g) => g.dispose())
+    return merged
+  }
+  makeExtrudedSign(maxW = 2.4) {
+    const geo = this.makeExtrudedSignGeo(maxW)
+    const grp = new THREE.Group()
+    const front = new THREE.Mesh(geo, std(0xfdfcfb, { roughness: 0.35, metalness: 0.04, emissive: new THREE.Color(0x222226) }))
+    front.castShadow = true; front.receiveShadow = true
+    const shadow = new THREE.Mesh(geo, std(0x828694, { roughness: 0.85, metalness: 0 }))
+    shadow.position.set(0.016, -0.018, -0.026)
+    shadow.castShadow = false; shadow.receiveShadow = true
+    grp.add(shadow, front)
+    grp.userData.front = front
+    grp.userData.shadow = shadow
+    return grp
   }
   updateFacadeSign() {
     if (!this.facadeSign) return
-    const tex = this.makeFacadeTex()
-    this.facadeSign.material.map = tex
-    this.facadeSign.material.needsUpdate = true
+    const nextGeo = this.makeExtrudedSignGeo(this.facadeSignMaxW || 2.4)
+    const oldGeo = this.facadeSign.userData.front?.geometry || this.facadeSign.geometry
+    oldGeo?.dispose?.()
+    if (this.facadeSign.userData.front) {
+      this.facadeSign.userData.front.geometry = nextGeo
+      this.facadeSign.userData.shadow.geometry = nextGeo
+    } else {
+      this.facadeSign.geometry = nextGeo
+    }
   }
   // posição na tela do balão de roubo (o botão em si é da interface)
   syncTheft() {
@@ -1069,9 +1253,9 @@ export class Renderer {
     }))
   }
   syncEditor() {
-    if (this.gridG) this.gridG.visible = ui.editing
+    if (this.gridG) this.gridG.visible = ui.editing && !ui.build // na obra a grade e a fila são da planta antiga: somem
     // com nada na mão, o modo layout mostra onde fica a fila do caixa atual
-    const list = ui.held?.preview || (ui.editing && game.register ? checkoutGuide(game.register, world.queueTiles) : [])
+    const list = ui.build ? [] : ui.held?.preview || (ui.editing && game.register ? checkoutGuide(game.register, world.queueTiles) : [])
     this.editTiles.forEach((m, i) => {
       const t = list[i], label = m.userData.label, arrow = m.userData.arrow
       m.visible = !!t
@@ -1085,67 +1269,129 @@ export class Renderer {
       }
     })
   }
-  // modo construção: área nova em verde, estoque em amarelo e a posição na tela dos controles de cada parede
+  // aba Construção: a loja real (piso e paredes) some e o rascunho aparece no lugar, com a seleção destacada e o cursor da ferramenta
   syncBuild() {
-    if (!this.buildFloor) {
-      const geo = new THREE.PlaneGeometry(1, 1)
-      const make = (color, opacity) => {
-        const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, opacity, transparent: true, depthWrite: false }))
-        m.rotation.x = -Math.PI / 2; m.visible = false; this.scene.add(m)
-        return m
-      }
-      this.buildFloor = [0, 1, 2, 3].map(() => make(0x7fd6a8, 0.6))
-      this.buildRoom = make(0xf2c25b, 0.5)
+    if (!this.buildPreviewG) {
+      this.buildPreviewG = new THREE.Group()
+      this.buildSelG = new THREE.Group()
+      this.scene.add(this.buildPreviewG, this.buildSelG)
+      this.buildPreviewKey = ''
+      this.buildSelKey = ''
+      this.buildEdgeMeshes = []
+      const curMat = new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.45, transparent: true, depthWrite: false })
+      this.buildCursor = new THREE.Mesh(new THREE.BoxGeometry(1, 0.08, 1), curMat)
+      this.buildCursor.visible = false
+      this.scene.add(this.buildCursor)
     }
     const b = ui.build
+    if (this.structG) this.structG.visible = !b
+    if (this.floorG) this.floorG.visible = !b
     if (!b) {
-      for (const m of [...this.buildFloor, this.buildRoom]) m.visible = false
+      this.buildPreviewG.visible = false
+      this.buildSelG.visible = false
+      this.buildCursor.visible = false
       if (ui.buildArrows.length) { ui.buildArrows = []; this.arrowKey = '' }
       return
     }
-    const area = (m, x0, z0, x1, z1) => {
-      m.visible = x1 > x0 && z1 > z0
-      if (m.visible) { m.position.set((x0 + x1) / 2, 0.05, (z0 + z1) / 2); m.scale.set(x1 - x0, z1 - z0, 1) }
+    this.buildPreviewG.visible = true
+    this.buildSelG.visible = true
+    const d = b.draft
+    const key = planKey(d)
+    if (key !== this.buildPreviewKey) {
+      this.buildPreviewKey = key
+      while (this.buildPreviewG.children.length) this.buildPreviewG.remove(this.buildPreviewG.children[0])
+      this.buildEdgeMeshes = []
+      const sMat = new THREE.MeshBasicMaterial({ color: 0x9fdcb8, opacity: 0.92, transparent: true, depthWrite: false })
+      const sMat2 = new THREE.MeshBasicMaterial({ color: 0x8fd2ab, opacity: 0.92, transparent: true, depthWrite: false })
+      const kMat = new THREE.MeshBasicMaterial({ color: 0xf2cf75, opacity: 0.92, transparent: true, depthWrite: false })
+      const wMat = new THREE.MeshStandardMaterial({ color: 0xf2dcc0, opacity: 0.92, transparent: true })
+      const winMat = new THREE.MeshStandardMaterial({ color: 0x7dd3fc, opacity: 0.8, transparent: true })
+      const dMat = new THREE.MeshStandardMaterial({ color: 0x6fb3a8, opacity: 0.92, transparent: true })
+      const tGeo = new THREE.PlaneGeometry(0.96, 0.96)
+      for (let iz = 0; iz < d.rows; iz++) {
+        for (let ix = 0; ix < d.cols; ix++) {
+          const ch = planCell(d, ix, iz)
+          if (ch === '.') continue
+          const m = new THREE.Mesh(tGeo, ch === 'k' ? kMat : (ix + iz) % 2 ? sMat : sMat2)
+          m.rotation.x = -Math.PI / 2; m.position.set(ix, 0.03, iz)
+          this.buildPreviewG.add(m)
+        }
+      }
+      for (const [ek, kind] of Object.entries(d.edges || {})) {
+        const [xs, zs, dir] = ek.split(',')
+        const ex = Number(xs), ez = Number(zs), horiz = dir === 'h'
+        const cx = horiz ? ex : ex - 0.5
+        const cz = horiz ? ez - 0.5 : ez
+        const h = kind === 'window' ? 1.1 : 1.35
+        const mat = kind === 'window' ? winMat : kind === 'door' ? dMat : wMat
+        const m = new THREE.Mesh(new THREE.BoxGeometry(horiz ? 1.04 : 0.16, h, horiz ? 0.16 : 1.04), mat)
+        m.position.set(cx, h / 2, cz)
+        m.userData.edge = { x: ex, z: ez, dir }
+        this.buildPreviewG.add(m)
+        this.buildEdgeMeshes.push(m)
+      }
     }
-    const r = this.canvas.getBoundingClientRect(), v = new THREE.Vector3()
-    let list
-    if (b.initial) {
-      const np = nextPlan(b), sr = stockRoom(np)
-      area(this.buildFloor[0], -0.5, -0.5, np.cols - 0.5, np.rows - 0.5)
-      for (const m of this.buildFloor.slice(1)) m.visible = false
-      area(this.buildRoom, sr.x0 - 0.5, sr.z0 - 0.5, sr.x1 - 0.5, sr.z1 - 0.5)
-      const scx = (sr.x0 + sr.x1 - 1) / 2, scz = (sr.z0 + sr.z1 - 1) / 2
-      const sEdgeX = sr.corner === 'ne' || sr.corner === 'se' ? sr.x0 - 0.5 : sr.x1 - 0.5
-      const sEdgeZ = sr.corner === 'sw' || sr.corner === 'se' ? sr.z0 - 0.5 : sr.z1 - 0.5
-      list = [
-        ['e', np.cols - 0.5 + 0.6, (np.rows - 1) / 2],
-        ['s', (np.cols - 1) / 2, np.rows - 0.5 + 0.6],
-        ['stockCols', sEdgeX, scz],
-        ['stockRows', scx, sEdgeZ],
-      ]
+    this.syncBuildSelection(b)
+    this.syncBuildHandles(b)
+    const hv = b.hover
+    if (!hv) { this.buildCursor.visible = false; return }
+    this.buildCursor.visible = true
+    const tool = b.carry ? b.carry.type : b.tool
+    const col = tool === 'erase' ? 0xef4444 : tool === 'stock' ? 0xf2c25b : tool === 'window' ? 0x38bdf8 : tool === 'door' ? 0x6fb3a8 : tool === 'select' ? 0xffffff : 0x7fd6a8
+    this.buildCursor.material.color.setHex(col)
+    this.buildCursor.material.opacity = tool === 'select' ? 0.3 : 0.45
+    if (hv.kind === 'edge') {
+      const horiz = hv.dir === 'h'
+      this.buildCursor.scale.set(horiz ? 1.05 : 0.22, 1.4, horiz ? 0.22 : 1.05)
+      this.buildCursor.position.set(horiz ? hv.x : hv.x - 0.5, 0.7, horiz ? hv.z - 0.5 : hv.z)
     } else {
-      const { cols, rows } = game.plan, np = nextPlan(b), sr = stockRoom(np)
-      const x0 = -0.5 - b.w, x1 = cols - 0.5 + b.e, z0 = -0.5 - b.n, z1 = rows - 0.5 + b.s
-      area(this.buildFloor[0], x0, z0, x1, z1)
-      for (const m of this.buildFloor.slice(1)) m.visible = false
-      area(this.buildRoom, sr.x0 - 0.5 - b.w, sr.z0 - 0.5 - b.n, sr.x1 - 0.5 - b.w, sr.z1 - 0.5 - b.n)
-      const midX = (x0 + x1) / 2, midZ = (z0 + z1) / 2
-      const scx = (sr.x0 + sr.x1 - 1) / 2 - b.w, scz = (sr.z0 + sr.z1 - 1) / 2 - b.n
-      const sEdgeX = (sr.corner === 'ne' || sr.corner === 'se' ? sr.x0 - 0.5 : sr.x1 - 0.5) - b.w
-      const sEdgeZ = (sr.corner === 'sw' || sr.corner === 'se' ? sr.z0 - 0.5 : sr.z1 - 0.5) - b.n
-      list = [
-        ['w', x0 - 0.6, midZ], ['e', x1 + 0.6, midZ], ['n', midX, z0 - 0.6], ['s', midX, z1 + 0.6],
-        ['stockCols', sEdgeX, scz], ['stockRows', scx, sEdgeZ],
-      ]
+      this.buildCursor.scale.set(0.98, 0.1, 0.98)
+      this.buildCursor.position.set(hv.x, 0.06, hv.z)
     }
-    list = list.map(([wall, x, z]) => {
-      v.set(x, 0.9, z).project(this.camera)
-      return { wall, x: Math.round(Math.max(80, Math.min(r.width - 80, r.left + ((v.x + 1) / 2) * r.width))), y: Math.round(Math.max(90, Math.min(r.height - 200, r.top + ((1 - v.y) / 2) * r.height))) }
-    })
-    // se dois controles se encostam (tela estreita, paredes próximas), o de depois desce
-    list.forEach((a, i) => { for (const o of list.slice(0, i)) if (Math.abs(a.x - o.x) < 100 && Math.abs(a.y - o.y) < 36) a.y = o.y + 36 })
-    const key = list.map((a) => a.x + ',' + a.y).join(';')
-    if (key !== this.arrowKey) { this.arrowKey = key; ui.buildArrows = list }
+  }
+  // destaque do que está selecionado: a parede inteira, o piso do cômodo ou a porta/janela (e de onde ela está saindo)
+  syncBuildSelection(b) {
+    const sel = b.sel, carry = b.carry
+    const key = this.buildPreviewKey + '|' + JSON.stringify(sel ? { k: sel.kind, r: sel.run, c: sel.cells?.length, c0: sel.cells?.[0], key: sel.key, t: sel.type } : null) + '|' + (carry?.from || '')
+    if (key === this.buildSelKey) return
+    this.buildSelKey = key
+    const G = this.buildSelG
+    while (G.children.length) G.remove(G.children[0])
+    if (!sel) return
+    const room = sel.kind === 'room'
+    const hl = new THREE.MeshBasicMaterial({ color: 0x14b8a6, opacity: 0.3, transparent: true, depthWrite: false })
+    const hlEdge = new THREE.MeshBasicMaterial({ color: 0x14b8a6, opacity: room ? 0.4 : 0.85, transparent: true, depthWrite: false })
+    const hlOpen = new THREE.MeshBasicMaterial({ color: 0xf59e0b, opacity: 0.9, transparent: true, depthWrite: false })
+    const edgeBox = (k, mat) => {
+      const [xs, zs, dir] = k.split(','), ex = Number(xs), ez = Number(zs), horiz = dir === 'h'
+      const m = new THREE.Mesh(new THREE.BoxGeometry(horiz ? 1.08 : 0.26, 1.48, horiz ? 0.26 : 1.08), mat)
+      m.position.set(horiz ? ex : ex - 0.5, 0.74, horiz ? ez - 0.5 : ez)
+      G.add(m)
+    }
+    if (sel.kind === 'run') for (const k of runKeys(sel.run)) edgeBox(k, hlEdge)
+    else if (sel.kind === 'opening') edgeBox(carry ? carry.from : sel.key, hlOpen)
+    else if (room) {
+      const geo = new THREE.PlaneGeometry(0.98, 0.98)
+      for (const c of sel.cells) { const m = new THREE.Mesh(geo, hl); m.rotation.x = -Math.PI / 2; m.position.set(c.x, 0.05, c.z); G.add(m) }
+      for (const r of sel.runs) for (const k of runKeys(r)) edgeBox(k, hlEdge)
+    }
+  }
+  // setas de mover parede: posição na tela (refeita a cada quadro, só vai para a interface quando muda)
+  syncBuildHandles(b) {
+    const list = selHandles()
+    const out = []
+    const r = this.canvas.getBoundingClientRect()
+    const v = this.tmpV1 || (this.tmpV1 = new THREE.Vector3()), w = this.tmpV2 || (this.tmpV2 = new THREE.Vector3())
+    for (const h of list) {
+      v.set(h.wx, 0.75, h.wz).project(this.camera)
+      if (v.z > 1) continue
+      w.set(h.wx + h.nx, 0.75, h.wz + h.nz).project(this.camera)
+      const x = (v.x + 1) / 2 * r.width + r.left, y = (1 - v.y) / 2 * r.height + r.top
+      const x2 = (w.x + 1) / 2 * r.width + r.left, y2 = (1 - w.y) / 2 * r.height + r.top
+      out.push({ id: h.id, x: Math.round(x), y: Math.round(y), ang: Math.round(Math.atan2(y2 - y, x2 - x) * 180 / Math.PI), tip: h.tip })
+    }
+    const k = JSON.stringify(out)
+    if (k !== this.arrowKey) { this.arrowKey = k; ui.buildArrows = out }
   }
   fillShelfItems(v, pid) {
     for (const m of v.inst) m.dispose()
@@ -1265,7 +1511,7 @@ export class Renderer {
     for (const b of boxes) {
       let v = this.boxViews.get(b.id)
       if (!v) { v = this.makeBoxView(b); this.boxViews.set(b.id, v) }
-      const p = slots.get(b.id)
+      const p = slots.get(b.id) || { x: 0, y: 0, z: 0 }
       const sel = ui.selectedBox === b.id
       let tx = p.x, tz = p.z, ty = p.y
       if (sel) { tx = world.player.x; tz = world.player.z; ty = 1.05 }
@@ -1573,7 +1819,8 @@ export class Renderer {
     this.sun.color.setHex(a.sun).lerp(this.tmpColor.setHex(b.sun), k)
     this.sun.intensity = lerp(a.si, b.si, k); this.hemi.intensity = lerp(a.hi, b.hi, k)
     const lamp = lerp(a.lamp, b.lamp, k)
-    this.lamps.forEach((l) => (l.intensity = lamp * 14)); this.lampLevel = Math.max(0, lamp - 0.7)
+    this.lampIntensity = lamp * 14
+    this.lamps.forEach((l) => (l.intensity = this.lampIntensity)); this.lampLevel = Math.max(0, lamp - 0.7)
   }
 
   // ---------- entrada ----------
@@ -1584,17 +1831,78 @@ export class Renderer {
       if (document.activeElement && document.activeElement !== document.body && document.activeElement !== c) {
         document.activeElement.blur?.()
       }
+      if (ui.build && e.button === 0) {
+        // Selecionar age no clique (soltar sem arrastar); as outras ferramentas pintam enquanto o botão está apertado
+        if (ui.build.tool === 'select') { this.buildDown = { x: e.clientX, y: e.clientY }; return }
+        this.buildPainting = true
+        beginBuildStroke()
+        this.applyBuildPaint(e)
+        return
+      }
       down = { x: e.clientX, y: e.clientY }
     })
     c.addEventListener('pointerup', (e) => {
+      if (this.buildDown) {
+        const bd = this.buildDown
+        this.buildDown = null
+        if (ui.build && e.button === 0 && Math.hypot(e.clientX - bd.x, e.clientY - bd.y) < 8) selectAt(this.pickBuildTarget(e))
+        return
+      }
+      if (this.buildPainting) { this.buildPainting = false; return }
       if (down && e.button === 0 && (ui.held || Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6)) this.onClick?.(this.pick(e), e)
       down = null
     })
     c.addEventListener('pointermove', (e) => {
       ui.mouse.x = e.clientX; ui.mouse.y = e.clientY
+      if (ui.build) {
+        this.updateBuildHover(e)
+        if (this.buildPainting) this.applyBuildPaint(e)
+        return
+      }
       this.pendingMove = e // processado uma vez por quadro, por mais eventos que o mouse dispare
     })
-    c.addEventListener('pointerleave', () => { this.pendingMove = null; this.hover = null; this.onHover?.(null) })
+    c.addEventListener('pointerleave', () => { this.buildPainting = false; this.buildDown = null; this.pendingMove = null; this.hover = null; this.onHover?.(null); if (ui.build) ui.build.hover = null })
+  }
+  pickBuildTarget(e) {
+    if (!ui.build) return null
+    const r = this.canvas.getBoundingClientRect()
+    this.mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1)
+    this.ray.setFromCamera(this.mouse, this.camera)
+    const d = ui.build.draft, tool = ui.build.tool, carry = ui.build.carry
+    // selecionar ou levar porta/janela: a parede desenhada é clicável em toda a altura, não só no pé
+    if (tool === 'select' && this.buildEdgeMeshes?.length) {
+      const hit = this.ray.intersectObjects(this.buildEdgeMeshes, false)[0]
+      if (hit) return { kind: 'edge', ...hit.object.userData.edge }
+    }
+    const p = new THREE.Vector3()
+    if (!this.ray.ray.intersectPlane(this.floorPlane, p)) return null
+    const gx = p.x + 0.5, gz = p.z + 0.5
+    const tx = Math.floor(gx), tz = Math.floor(gz)
+    if (gx < -0.3 || gz < -0.3 || gx > d.cols + 0.3 || gz > d.rows + 0.3) return null
+    const fx = gx - tx, fz = gz - tz
+    const dLeft = Math.abs(gx - Math.round(gx)), dTop = Math.abs(gz - Math.round(gz))
+    const edgeHere = () => (dLeft <= dTop
+      ? { kind: 'edge', x: Math.max(0, Math.min(d.cols, Math.round(gx))), z: Math.max(0, Math.min(d.rows - 1, tz)), dir: 'v' }
+      : { kind: 'edge', x: Math.max(0, Math.min(d.cols - 1, tx)), z: Math.max(0, Math.min(d.rows, Math.round(gz))), dir: 'h' })
+    const wantEdge = tool === 'wall' || tool === 'window' || tool === 'door' || !!carry
+    if (wantEdge || (tool === 'erase' && Math.min(dLeft, dTop) < 0.22)) return edgeHere()
+    if (tool === 'select' && Math.min(dLeft, dTop) < 0.24) {
+      const eh = edgeHere()
+      if (d.edges[edgeKey(eh.x, eh.z, eh.dir)]) return eh
+    }
+    if (tx < 0 || tz < 0 || tx >= d.cols || tz >= d.rows) return null
+    return { kind: 'cell', x: tx, z: tz, fx, fz }
+  }
+  updateBuildHover(e) {
+    if (!ui.build) return
+    ui.build.hover = this.pickBuildTarget(e)
+  }
+  applyBuildPaint(e) {
+    const hv = this.pickBuildTarget(e)
+    if (!hv || !ui.build) return
+    ui.build.hover = hv
+    if (hv.kind === 'edge') paintEdge(hv.x, hv.z, hv.dir)
+    else paintCell(hv.x, hv.z)
   }
   pick(e) {
     if (ui.build) return null // durante a obra os cliques são dos controles das paredes
@@ -1672,8 +1980,16 @@ export class Renderer {
     const { cols, rows } = dims(game.plan), mx = cols * 0.8, mz = rows * 0.8
     const ox = t.x - f.x, oz = t.z - f.z
     this.shiftView(Math.max(-mx, Math.min(mx, ox)) - ox, Math.max(-mz, Math.min(mz, oz)) - oz)
-    this.controls.enablePan = !ui.held // com um móvel na mão, o mouse é do móvel
+    this.controls.enablePan = !ui.held && !this.buildPainting // com um móvel na mão ou pintando obra, o mouse é da ação
+    this.controls.mouseButtons.LEFT = ui.build ? null : THREE.MOUSE.PAN
     this.controls.update()
+    if (this.cutawayWalls?.length) {
+      const backOnly = (game.shopStyle?.wallMode || 'full') === 'back'
+      const sin = Math.sin(this.camAngle), cos = Math.cos(this.camAngle)
+      for (const w of this.cutawayWalls) {
+        w.obj.visible = !backOnly || (w.nx * sin + w.nz * cos <= 0.15)
+      }
+    }
     const panned = Math.hypot(t.x - f.x, t.z - f.z) > 0.6
     if (panned !== ui.panned) ui.panned = panned
   }

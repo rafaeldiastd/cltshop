@@ -42,7 +42,7 @@ onBeforeUnmount(() => clearTimeout(timer))
 </script>
 
 <template>
-  <div class="stack">
+  <div class="stack" :class="{ editing: ui.editing }">
     <TransitionGroup name="toast">
       <div v-if="hint && hintVisible" key="hint" class="hint"><component :is="hint.icon" weight="duotone" /> {{ hint.text }}</div>
       <div v-for="t in ui.toasts" :key="t.id" class="toast" :class="t.kind" role="status">
@@ -53,6 +53,9 @@ onBeforeUnmount(() => clearTimeout(timer))
 </template>
 
 <style scoped>
+/* no modo de edição o menu lateral ocupa a esquerda: as notificações ficam ao lado dele */
+.stack.editing { left: 364px; }
+@media (max-width: 720px) { .stack.editing { left: 12px; } }
 .stack { position: fixed; left: 12px; top: 72px; width: min(300px, calc(100vw - 24px)); display: flex; flex-direction: column; gap: 6px; z-index: 9; pointer-events: none; }
 .hint, .toast { display: flex; gap: 8px; align-items: flex-start; border-radius: 12px; font-weight: 700; line-height: 1.3; box-shadow: var(--shadow); }
 .hint svg, .toast svg { font-size: 18px; margin-top: 1px; }

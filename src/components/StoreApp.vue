@@ -5,9 +5,8 @@ import { game, ui, money, upgradeType, canExpand, maxCustomers, restartGame, wag
 import { onDuty, pendingRequests } from '../game/team.js'
 import { world } from '../game/world.js'
 import { buyShelf, canBuyShelf, buyFreezer, canBuyFreezer, buyMeatStand, canBuyMeatStand, buyProduceStand, canBuyProduceStand, buyCafe, canBuyCafe, startEdit } from '../game/editor.js'
-import { startBuild, buildRate } from '../game/build.js'
 import { planArea } from '../game/layout.js'
-import { LEVELS, SHELF_PRICE, FREEZER_PRICE, PRODUCE_PRICE, MEAT_PRICE, CAFE, FREEZER } from '../game/config.js'
+import { LEVELS, SHELF_PRICE, FREEZER_PRICE, PRODUCE_PRICE, MEAT_PRICE, CAFE, FREEZER, BUILD_TILES } from '../game/config.js'
 
 const next = () => LEVELS[game.level + 1]
 const type = computed(() => LEVELS[game.level])
@@ -46,8 +45,8 @@ const cafeNote = computed(() => {
         </div>
         <div class="line">
           <PhHammer class="ico" weight="duotone" />
-          <div class="col"><b>Construção</b><span class="muted">{{ money(buildRate(planArea(game.plan))) }}/m² · {{ type.name }} vai até {{ type.maxCols }}×{{ type.maxRows }}, com estoque até {{ type.stock.maxCols }}×{{ type.stock.maxRows }}</span></div>
-          <button class="btn good" :disabled="!canExpand()" @click="startBuild">Construir</button>
+          <div class="col"><b>Construção</b><span class="muted">A partir de {{ money(BUILD_TILES.sales) }}/m² (piso) · {{ money(BUILD_TILES.wall) }}/parede · terreno até {{ type.maxCols }}×{{ type.maxRows }}</span></div>
+          <button class="btn good" :disabled="!canExpand()" @click="startEdit('build')">Construir</button>
         </div>
         <div class="line">
           <PhPackage class="ico" weight="duotone" />
@@ -97,8 +96,8 @@ const cafeNote = computed(() => {
         </div>
         <div class="line">
           <PhWrench class="ico" weight="duotone" />
-          <div class="col"><b>Layout</b><span class="muted">{{ isClosed() ? 'mude móveis, caixa, computador e rádio de lugar' : 'só com a loja fechada' }}</span></div>
-          <button class="btn" :disabled="!isClosed()" @click="startEdit">Mudar layout</button>
+          <div class="col"><b>Editar loja</b><span class="muted">{{ isClosed() ? 'móveis, decoração, inventário e construção num lugar só' : 'só com a loja fechada' }}</span></div>
+          <button class="btn" :disabled="!isClosed()" @click="startEdit('shelves')">Editar loja</button>
         </div>
       </section>
 

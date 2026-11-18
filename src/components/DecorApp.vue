@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { PhCoffee, PhPaintBrush, PhPottedPlant, PhSecurityCamera, PhLamp, PhLightbulb, PhCheck, PhClock, PhFrameCorners, PhSiren, PhLock, PhHouseLine } from '@phosphor-icons/vue'
+import { PhCoffee, PhPaintBrush, PhPottedPlant, PhSecurityCamera, PhLamp, PhLampPendant, PhLightbulb, PhCheck, PhClock, PhFrameCorners, PhSiren, PhLock, PhHouseLine } from '@phosphor-icons/vue'
 import { game, money, isClosed, decorCount, sellDecor, hasPerk, buyDoormat, setDoormat, cleanMatText, setShopName, setShopStyle, defaultShopStyle } from '../game/state.js'
 import { isDecorUnlocked, decorUnlockHint } from '../game/goals.js'
 import { buyDecor, canBuyDecor, decorMaxed } from '../game/editor.js'
@@ -10,7 +10,7 @@ import { DECOR, DOORMAT, WALLPAPERS, WALL_COLORS, TRIM_COLORS, WALL_MODES } from
 const subTab = ref('decor') // decor | style
 const items = Object.entries(DECOR).filter(([, d]) => d.price && (!d.perk || hasPerk(d.perk)))
 const resale = (d) => Math.floor(d.price / 2)
-const ICON = { camera: PhSecurityCamera, alarm: PhSiren, cafeTable: PhCoffee, lamp: PhLamp, led: PhLightbulb, clock: PhClock, frame: PhFrameCorners } // itens sem modelo GLB pronto
+const ICON = { camera: PhSecurityCamera, alarm: PhSiren, cafeTable: PhCoffee, lamp: PhLamp, pendant: PhLampPendant, led: PhLightbulb, clock: PhClock, frame: PhFrameCorners } // itens sem modelo GLB pronto
 
 const style = computed(() => ({ ...defaultShopStyle(), ...(game.shopStyle || {}) }))
 

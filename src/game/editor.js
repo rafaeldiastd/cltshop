@@ -2,7 +2,9 @@
 import { game, ui, hooks, toast, uid, money, isClosed, maxShelves, maxFreezers, maxMeat, maxProduce, shelfCount, freezerCount, meatCount, produceCount, decorCount } from './state.js'
 import { isDecorUnlocked, decorUnlockHint } from './goals.js'
 import { RESALE, SHELF_PRICE, WALL_SHELF_PRICE, FREEZER_PRICE, PRODUCE_PRICE, MEAT_PRICE, DECOR, CAFE } from './config.js'
-import { checkLayout, dims, shelfAccess, cashierTile, queueTiles, queueFor, onFloor, produceSlots } from './layout.js'
+import { checkLayout, dims, shelfAccess, cashierTile, queueTiles, queueFor, onFloor, produceSlots, isWallDecor, isCeilingDecor } from './layout.js'
+import { unitOf, storable, stashShelf, stashDecor, stashCafe, unstash, clearAll } from './inventory.js'
+import { startBuild, stopBuild, buildChanged } from './build.js'
 export { produceSlots }
 
 const COLOR = { ok: 0x7fd6a8, bad: 0xe0675d, access: 0xf2c25b, queue: 0x4f9fe0 }
@@ -13,20 +15,42 @@ export const checkoutGuide = (r, queue, color = COLOR.queue) => [
 ]
 const find = (kind, id) => (kind === 'shelf' ? game.shelves.find((s) => s.id === id) : kind === 'decor' ? game.decor.find((d) => d.id === id) : kind === 'cafe' ? game.cafe : game.register)
 
-export function startEdit() {
-  if (!isClosed()) return toast('Só dá para mexer no layout com a loja fechada', 'bad')
+// modo de edição da loja: painel lateral com abas (móveis, decoração, inventário e construção)
+export function startEdit(tab) {
+  if (window.__visiting) return toast('Você está visitando outra loja', 'bad')
+  if (!isClosed()) return toast('Só dá para mexer na loja com ela fechada', 'bad')
   ui.modal = null
   ui.panelShelf = null
   ui.panelCafe = false
+  ui.panelArcade = null
   ui.selectedBox = null
-  ui.editing = true
-  ui.held = null
+  if (!ui.editing) { ui.editing = true; ui.held = null }
+  if (game.plan.built === false) tab = 'build'
+  setEditTab(tab || (ui.editTab === 'build' ? 'shelves' : ui.editTab) || 'shelves')
 }
+export function setEditTab(tab) {
+  if (tab === ui.editTab && (tab !== 'build' || ui.build)) return
+  if (tab === 'build') {
+    deselectTool()
+    if (!startBuild()) return
+  } else if (ui.build) {
+    if (game.plan.built === false) return toast('Construa a loja primeiro', 'bad')
+    if (buildChanged()) return toast('Aplique ou descarte a obra antes de sair da construção', 'bad')
+    stopBuild()
+  }
+  ui.editTab = tab
+}
+// false quando há uma obra sem aplicar: o jogador decide antes de sair
 export function stopEdit() {
+  if (ui.build && buildChanged()) { toast('Aplique ou descarte a obra antes de sair', 'bad'); return false }
+  if (ui.build) stopBuild()
+  if (ui.editTab === 'build') ui.editTab = 'shelves'
   ui.buyTool = null
+  ui.invTool = null
   cancelHeld()
   ui.editing = false
   hooks.refreshGrid()
+  return true
 }
 
 function candidate(h) {
@@ -70,7 +94,8 @@ function evaluate() {
   if (h.kind === 'shelf') h.preview.push({ ...shelfAccess({ ...h, variant: find('shelf', h.id)?.variant }), c: COLOR.access, o: 0.5, arrow: [h.x, h.z] })
   if (h.kind === 'cafe') h.preview.push({ ...shelfAccess(h), c: COLOR.queue, o: 0.55, label: 'Cliente' }, { ...cashierTile(h), c: COLOR.access, o: 0.7, label: 'Atendente' })
   if (h.kind === 'counter') {
-    const blocked = new Set([...L.shelves, ...L.decor, L.register, ...(L.cafe ? [L.cafe] : [])].map((o) => o.x + ',' + o.z))
+    const floorDecor = L.decor.filter((d) => !isWallDecor(d) && !isCeilingDecor(d)) // parede e teto não tomam o lugar da fila
+    const blocked = new Set([...L.shelves, ...floorDecor, L.register, ...(L.cafe ? [L.cafe] : [])].map((o) => o.x + ',' + o.z))
     // mesmo num lugar inválido mostra (em vermelho) onde a fila ficaria
     const queue = (h.valid && queueTiles(game.plan, L.register, blocked)) || queueFor(h, (x, z) => onFloor(game.plan, x, z)) || []
     h.preview.push(...checkoutGuide(h, queue, h.valid ? COLOR.queue : COLOR.bad))
@@ -179,7 +204,7 @@ export function sellAt(hit) {
   sellHeld()
   if (ui.held) cancelHeld() // não vendeu (tem produto): o móvel volta como estava
 }
-export const heldShelf = () => (ui.held?.kind === 'shelf' && ui.held.isNew ? game.shelves.find((x) => x.id === ui.held.id && x.kind === 'shelf') : null)
+export const heldShelf = () => (ui.held?.kind === 'shelf' && ui.held.isNew && !ui.held.fromInv ? game.shelves.find((x) => x.id === ui.held.id && x.kind === 'shelf') : null)
 export function toggleProduceStyle() {
   const h = ui.held
   const shelf = heldShelf()
@@ -193,6 +218,7 @@ export function toggleProduceStyle() {
     return
   }
   if (!h || h.kind !== 'produceGroup') return
+  if (h.fromInv) return toast('O expositor guardado volta com o formato que tinha', 'bad')
   if (!h.isNew) return toast('O formato só muda ao comprar: o expositor já instalado mantém o seu', 'bad')
   h.style = h.style === 'wall' ? 'island' : 'wall'
   ui.produceStyle = h.style
@@ -214,7 +240,8 @@ export function dropHeld() {
       const obj = game.shelves.find((x) => x.groupId === h.groupId && x.slot === s.slot)
       if (obj) Object.assign(obj, { x: s.x, z: s.z, rot: s.rot, style: s.style, level: s.level, reach: s.reach, grot: s.grot })
     }
-    if (h.isNew) toast(`Expositor de hortifruti instalado por ${money(h.price)}`, 'good')
+    if (h.fromInv) unstash('produceGroup', h.groupId)
+    else if (h.isNew) toast(`Expositor de hortifruti instalado por ${money(h.price)}`, 'good')
     ui.held = null
     hooks.refreshGrid()
     keepBuying(h)
@@ -222,7 +249,8 @@ export function dropHeld() {
   }
   const obj = find(h.kind, h.id)
   Object.assign(obj, { x: h.x, z: h.z, rot: h.rot })
-  if (h.isNew) toast(`Comprado por ${money(h.price)}`, 'good')
+  if (h.fromInv) unstash(h.kind, h.id)
+  else if (h.isNew) toast(`Comprado por ${money(h.price)}`, 'good')
   ui.held = null
   hooks.refreshGrid()
   keepBuying(h)
@@ -236,6 +264,11 @@ export const TOOLS = {
   meat: { name: 'Freezer de carne', price: MEAT_PRICE, can: () => canBuyMeatStand(), buy: () => buyMeatStand() },
 }
 function keepBuying(h) {
+  if (h.fromInv) { // recolocando do inventário: pega o próximo do mesmo tipo, até acabar
+    if (ui.invTool && ui.editing && unitOf(ui.invTool)) takeFromInv(ui.invTool)
+    else ui.invTool = null
+    return
+  }
   if (!h.isNew || !ui.buyTool || !ui.editing) return
   const t = TOOLS[ui.buyTool]
   if (!t.can()) { toast(`${t.name}: sem caixa ou no limite do seu comércio. Ferramenta desligada`, 'bad'); ui.buyTool = null; return }
@@ -243,6 +276,7 @@ function keepBuying(h) {
 }
 export function selectTool(tool) {
   if (ui.buyTool === tool) return deselectTool()
+  ui.invTool = null
   if (ui.held?.isNew) { ui.buyTool = null; cancelHeld() }
   else if (ui.held) cancelHeld()
   ui.buyTool = tool
@@ -252,11 +286,69 @@ export function selectTool(tool) {
 }
 export function deselectTool() {
   ui.buyTool = null
+  ui.invTool = null
   cancelHeld()
+}
+
+// ---------- inventário ----------
+// pega um item do inventário (de graça: já foi pago); ele segue o mouse até o lugar, como um móvel novo
+export function takeFromInv(key) {
+  if (!isClosed()) return toast('Mexa na loja com ela fechada', 'bad')
+  const u = unitOf(key, 'full')
+  if (!u) { ui.invTool = null; return }
+  if (!ui.editing) startEdit()
+  if (ui.build) return
+  ui.buyTool = null
+  cancelHeld()
+  ui.invTool = key
+  const { cols, rows } = dims(game.plan)
+  const o = u.items[0], mid = { x: Math.floor(cols / 2), z: Math.floor(rows / 2) }
+  if (u.kind === 'produceGroup') {
+    game.shelves.push(...u.items)
+    ui.held = { kind: 'produceGroup', groupId: u.groupId, style: o.style || 'island', x: Math.max(0, mid.x - 1), z: Math.max(0, mid.z - 1), rot: o.grot || 0, isNew: true, fromInv: true, price: 0 }
+  } else if (u.kind === 'cafe') {
+    game.cafe = o
+    ui.held = { kind: 'cafe', id: o.id, ...mid, rot: o.rot || 0, isNew: true, fromInv: true, price: 0 }
+  } else {
+    (u.kind === 'shelf' ? game.shelves : game.decor).push(o)
+    const wall = u.kind === 'decor' && DECOR[o.type]?.wall
+    ui.held = { kind: u.kind, id: o.id, x: mid.x, z: wall ? 0 : mid.z, rot: o.rot || 0, isNew: true, fromInv: true, price: 0 }
+  }
+  evaluate()
+}
+const heldObj = (h) => (h.kind === 'produceGroup' ? game.shelves.find((s) => s.groupId === h.groupId) : find(h.kind, h.id))
+export const canStoreHeld = () => { const h = ui.held; return !!h && !h.isNew && h.kind !== 'counter' && storable(h.kind, heldObj(h)) }
+// guarda no inventário o móvel na mão: sai da loja e pode voltar depois sem pagar de novo
+export function storeHeld() {
+  const h = ui.held
+  if (!h) return
+  if (h.isNew) { deselectTool(); return } // ainda não foi pago (ou já é do inventário): só larga
+  if (!canStoreHeld()) return toast('Esse item é da loja: só muda de lugar', 'bad')
+  const o = heldObj(h)
+  ui.held = null
+  if (h.kind === 'produceGroup') for (const s of game.shelves.filter((s) => s.groupId === h.groupId)) stashShelf(s)
+  else if (h.kind === 'shelf') stashShelf(o)
+  else if (h.kind === 'decor') stashDecor(o)
+  else if (h.kind === 'cafe') stashCafe()
+  hooks.refreshGrid()
+  toast('Guardado no inventário', 'good')
+}
+// guarda o móvel sob o mouse (tecla I)
+export function storeAt(hit) {
+  if (!hit || !['shelf', 'decor', 'cafe'].includes(hit.kind)) return
+  pickUp(hit.kind, hit.id)
+  if (ui.held) storeHeld()
+  if (ui.held) cancelHeld()
+}
+export function clearStore() {
+  deselectTool()
+  const n = clearAll()
+  toast(n ? `${n === 1 ? '1 item guardado' : `${n} itens guardados`} no inventário: recoloque de graça quando quiser` : 'Nada para guardar', n ? 'good' : 'info')
 }
 export function cancelHeld() {
   const h = ui.held
   if (!h) return
+  // vindo do inventário, o item só sai da loja: ele continua guardado
   if (h.isNew && h.kind === 'produceGroup') {
     const list = game.shelves
     for (let i = list.length - 1; i >= 0; i--) {
@@ -272,7 +364,10 @@ export function cancelHeld() {
 
 // item novo fica na mão e só é cobrado ao ser colocado no lugar
 function holdNew(kind, item, price) {
-  if (!ui.editing) startEdit()
+  ui.modal = null
+  if (!ui.editing) startEdit(kind === 'decor' ? 'decor' : 'shelves')
+  if (ui.build) setEditTab(kind === 'decor' ? 'decor' : 'shelves')
+  if (ui.build) return
   cancelHeld()
   const { cols, rows } = dims(game.plan)
   if (kind === 'cafe') game.cafe = item
@@ -316,7 +411,10 @@ const produceMembers = (groupId, style) => (style === 'wall' ? [0, 1] : [0, 1, 2
 export const canBuyProduceStand = () => isClosed() && game.money >= PRODUCE_PRICE && produceCount() < maxProduce()
 export function buyProduceStand(style = 'island') {
   if (!canBuyProduceStand()) return toast(isClosed() ? 'Sem caixa ou limite atingido para banca de hortifruti' : 'Instale móveis com a loja fechada', 'bad')
-  if (!ui.editing) startEdit()
+  ui.modal = null
+  if (!ui.editing) startEdit('shelves')
+  if (ui.build) setEditTab('shelves')
+  if (ui.build) return
   cancelHeld()
   const { cols, rows } = dims(game.plan)
   const groupId = 'produce_' + uid()

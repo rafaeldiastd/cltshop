@@ -3,7 +3,7 @@ import { PRODUCTS, PID, DAY_SECONDS, PACK, MOODS, PETS, CAMERA_STOP_CHANCE, CAFE
 import { onDuty, isOff, walkMult, workMult, serveMult, skillSpeed, energyDrain, gainMemberXp, restTeam, teamMorning, ensureCandidates } from './team.js'
 import { makeGoals, checkGoals, checkBigGoals } from './goals.js'
 import { mp, broadcastClean, broadcastPet, broadcastPrank, sendEmote } from './multiplayer.js'
-import { dims, cashierTile, queueTiles, doorTile, doorInside, shelfAccess, shelfPoint, stockStand, stockRoom, inStock, boxSlots, isUsable, isArcade } from './layout.js'
+import { dims, cashierTile, queueTiles, doorTile, doorInside, shelfAccess, shelfPoint, stockStand, stockRoom, inStock, boxSlots, isUsable, isArcade, isGridPlan, planCell, canCrossGridEdge } from './layout.js'
 import { sfx } from './audio.js'
 import { hoverText } from './texts.js'
 import { newNpcIdentity, npcInfo, staffInfo } from './npc.js'
@@ -254,7 +254,7 @@ class World {
     this.room = stockRoom(game.plan)
     this.blocked = new Set()
     game.shelves.forEach((s) => this.blocked.add(key(s.x, s.z)))
-    game.decor.forEach((d) => { if (!DECOR[d.type]?.wall) this.blocked.add(key(d.x, d.z)) })
+    game.decor.forEach((d) => { if (!DECOR[d.type]?.wall && !DECOR[d.type]?.ceiling) this.blocked.add(key(d.x, d.z)) }) // parede e teto não ocupam o chão
     if (game.cafe) this.blocked.add(key(game.cafe.x, game.cafe.z))
     const reg = game.register
     if (reg) {
@@ -281,13 +281,24 @@ class World {
   walkAt(x, z) {
     const r = 0.2, corners = [[-r, -r], [r, -r], [-r, r], [r, r]]
     if (!corners.every(([dx, dz]) => this.walkable(Math.round(x + dx), Math.round(z + dz)))) return false
+    if (isGridPlan(game.plan)) {
+      const cx = Math.round(x), cz = Math.round(z)
+      return corners.every(([dx, dz]) => {
+        const tx = Math.round(x + dx), tz = Math.round(z + dz)
+        if (tx !== cx && !canCrossGridEdge(game.plan, cx, cz, tx, cz)) return false
+        if (tz !== cz && !canCrossGridEdge(game.plan, cx, cz, cx, tz)) return false
+        if (tx !== cx && tz !== cz && (!canCrossGridEdge(game.plan, tx, cz, tx, tz) || !canCrossGridEdge(game.plan, cx, tz, tx, tz))) return false
+        return true
+      })
+    }
     const sides = corners.map(([dx, dz]) => inStock(game.plan, x + dx, z + dz))
     if (sides.every((s) => s === sides[0])) return true
     // encostando na parede do estoque: só atravessa pelo vão da porta
     return Math.abs(x - this.room.wallX) <= r && Math.abs(z - this.room.door.z) <= 0.5 - r
   }
-  // a parede do estoque separa dois lugares vizinhos, exceto na porta
+  // a parede separa dois lugares vizinhos, exceto na porta
   canStep(ax, az, bx, bz) {
+    if (isGridPlan(game.plan)) return canCrossGridEdge(game.plan, ax, az, bx, bz)
     if (inStock(game.plan, ax, az) === inStock(game.plan, bx, bz)) return true
     const { door, doorOut } = this.room
     return (ax === door.x && az === door.z && bx === doorOut.x && bz === doorOut.z) || (bx === door.x && bz === door.z && ax === doorOut.x && az === doorOut.z)
@@ -296,6 +307,11 @@ class World {
     const { cols, rows, doorX } = this.d
     if (z < 0) return false
     if (game.plan.built === false) return z <= rows + 2 && x >= -3 && x <= cols + 2
+    if (isGridPlan(game.plan)) {
+      if (z <= rows - 1) return x >= 0 && x <= cols - 1 && !this.blocked.has(key(x, z))
+      if (z <= rows + 2) return x >= -3 && x <= cols + 2
+      return false
+    }
     if (z <= rows - 1) return x >= 0 && x <= cols - 1 && !this.blocked.has(key(x, z))
     if (z === rows) return x === doorX
     if (z <= rows + 2) return x >= -3 && x <= cols + 2
@@ -742,7 +758,9 @@ class World {
       }
     }
     const hasStocker = game.team.some((m) => m.role === 'stocker')
-    for (const s of game.shelves) {
+    // o que está guardado no inventário continua vencendo, como se estivesse na prateleira
+    const stored = (game.inventory?.shelves || []).filter((s) => !game.shelves.includes(s))
+    for (const s of [...game.shelves, ...stored]) {
       if (!s.product || s.count <= 0) { s.daysLeft = null; s.batches = []; continue }
       syncShelfBatches(s)
       for (const bt of s.batches) bt.daysLeft--
