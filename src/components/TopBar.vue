@@ -101,7 +101,7 @@ const openStartMenu = () => { modeOpen.value = false; ui.modal = 'start' }
       <button class="btn sm" :class="{ primary: game.speed === 1 && !game.paused }" @click="game.speed = 1; game.paused = false">1×</button>
       <button class="btn sm" :class="{ primary: game.speed === 2 }" @click="game.speed = 2; game.paused = false">2×</button>
     </div>
-    <button v-if="game.plan.built !== false && !ui.editing" class="btn" title="Alternar paredes (Completas / Transparentes / Sem paredes)" @click="cycleWallMode">{{ wallModeInfo.icon }} {{ wallModeInfo.name }}</button>
+    <button v-if="game.plan.built !== false && !ui.editing" class="btn" title="Alternar paredes (Completas / Transparentes / Só fundo / Sem paredes)" @click="cycleWallMode">{{ wallModeInfo.icon }} {{ wallModeInfo.name }}</button>
     <button v-if="!ui.editing && !mp.visiting" class="btn mp-btn" title="Multiplayer e visitas em outras lojas" @click="ui.modal = 'multiplayer'">
       <PhGlobe weight="duotone" /> Online
       <b v-if="mp.visitors.length" class="v-badge">{{ mp.visitors.length }}</b>

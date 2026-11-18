@@ -128,9 +128,19 @@ export const BUILD_MODES = {
   normal:   { initRate: 5, base: 32, perM2: 0.6,  from: 30, minCols: 6, minRows: 5, minStockCols: 2, minStockRows: 2, minStockArea: 6, minSalesArea: 20 },
   hardcore: { initRate: 5, base: 40, perM2: 0.75, from: 30, minCols: 6, minRows: 5, minStockCols: 2, minStockRows: 2, minStockArea: 6, minSalesArea: 20 },
 }
+export const BUILD_TILES = {
+  sales: 3,   // R$/m² piso da loja
+  stock: 4,   // R$/m² piso do estoque
+  wall: 2,    // R$/un parede
+  window: 4,  // R$/un janela
+  door: 5,    // R$/un porta
+  minSales: 20,
+  minStock: 6,
+}
 export const WALL_MODES = [
   { id: 'full', name: 'Completas', icon: '🧱' },
   { id: 'transparent', name: 'Transparentes', icon: '🪟' },
+  { id: 'back', name: 'Só fundo', icon: '📐' },
   { id: 'none', name: 'Sem paredes', icon: '🫥' },
 ]
 
@@ -217,7 +227,9 @@ export const DECOR = {
   basketball: { name: 'basquete de arcade', price: 260, goal: 'branch_1' },
   airHockey: { name: 'aero hockey', price: 280, goal: 'custom_3' },
   dance:     { name: 'máquina de dança', price: 320, goal: 'custom_2' },
-  // perk = só aparece para compra depois da melhoria de carreira correspondente
+  // ceiling = pendurado no teto: não ocupa o chão (dá para ficar em cima de prateleira, caixa ou corredor), só não divide o lugar com outra coisa de teto
+  pendant:   { name: 'luminária pendente', price: 60, max: 6, ceiling: true, desc: 'Pendurada no teto: ilumina a loja à noite e não ocupa o chão' },
+  // perk =só aparece para compra depois da melhoria de carreira correspondente
   lamp:      { name: 'abajur', price: 90, perk: 'lights', desc: 'Atrai clientes à noite (18h–21h)' },
   led:       { name: 'fita LED', price: 70, perk: 'lights', desc: 'Atrai clientes à noite (18h–21h)' },
   computer:  { name: 'computador' },

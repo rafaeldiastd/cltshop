@@ -2,7 +2,7 @@ import { reactive, watch } from 'vue'
 import { PRODUCTS, PID, LEVELS, STAFF, START_MONEY, PACK, DAY_SECONDS, DECOR, EVENTS, WEATHER, EXPRESS_FEE, CAFE_ID, CAFE_MENU, SHELF_CAP, SHELF_CAP_BIG, CAREER_ID, careerNext, CONTRACTS, SHELF_BOOST, PASS, DOORMAT, RUMOR, canStockProduct, shelfLifeOf, GAME_MODES, REGIONS } from './config.js'
 import { makePerson } from './people.js'
 import { AVATAR_PARTS, defaultAvatar } from './avatarData.js'
-import { basePlan, planArea, stockRoom, defaultRegister, defaultShelves, defaultFreezers, defaultProduce, produceSlots, defaultDecor, usableDecor, settleLayout } from './layout.js'
+import { basePlan, planArea, stockRoom, defaultRegister, defaultShelves, defaultFreezers, defaultProduce, produceSlots, defaultDecor, defaultPendants, usableDecor, settleLayout } from './layout.js'
 
 let _id = 1
 export const uid = () => _id++
@@ -14,6 +14,8 @@ const newCareer = () => ({ xp: 0, earned: 0, points: 0, perks: {} })
 const newPomodoro = () => ({ focusMin: 25, breakMin: 5, autoCycle: true, autoRestock: true, autoPilot: true, sessions: 0 })
 const newLifetime = () => ({ served: 0, revenue: 0, robberiesStopped: 0, goalsDone: 0 })
 export const defaultShopStyle = () => ({ wallPaper: 'solid', wallColor: '#f2dcc0', trimColor: '#b98a5a', wallMode: 'full' })
+// inventário: móveis e decorações já pagos, guardados fora da loja; voltam para o lugar sem custo
+export const emptyInventory = () => ({ shelves: [], decor: [], cafe: null })
 
 export const game = reactive({
   day: 1,
@@ -51,6 +53,7 @@ export const game = reactive({
   orders: [], // pedidos do Zap da Lojinha no dia
   zapOn: true,
   decorV2: false, // relógio, quadros e vitrines viraram decoração comprável (saves antigos ganham os que já tinham)
+  pendantsV1: false, // as luminárias do teto viraram decoração que se move (saves antigos ganham as duas)
   pass: { claimed: {} }, // recompensas do passe já resgatadas, por nível
   goals: [], // metas do dia
   goalsDay: 0,
@@ -71,6 +74,7 @@ export const game = reactive({
   playerName: 'Lojista',
   shopName: 'Lojinha Lofi',
   shopStyle: defaultShopStyle(),
+  inventory: emptyInventory(),
   visitorLog: [],
 })
 
@@ -96,7 +100,9 @@ export const ui = reactive({
   panned: false,
   recenter: false,
   panelCafe: false,
-  build: null, // obra sendo planejada: quantos quadrados cada parede anda
+  build: null, // obra sendo planejada (aba Construção do modo de edição): rascunho da planta, ferramenta e seleção
+  editTab: 'shelves', // aba do painel lateral do modo de edição: shelves | decor | inv | build
+  invTool: null, // grupo do inventário sendo recolocado: cada clique solta um e pega o próximo, até acabar ou desmarcar
   buildArrows: [], // posição na tela dos controles de cada parede
   atRegister: false,
   theft: null, // balão do roubo em andamento: posição na tela e tempo restante
@@ -272,10 +278,10 @@ export function newGame(opts = {}) {
     shelves: [], register: null, decor: [],
     boxes: [], pending: [], priceMemory: {}, expiryPriceMemory: {}, team: [], candidates: [],
     today: newStats(), summary: null, playerPos: null, market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {},
-    career: newCareer(), bought: {}, recipes: {}, orders: [], zapOn: true, decorV2: true,
+    career: newCareer(), bought: {}, recipes: {}, orders: [], zapOn: true, decorV2: true, pendantsV1: true,
     pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null,
     mode, pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: sName, shopName: sName, playerName: pName, shopStyle: defaultShopStyle(), branches: [],
-    lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0, visitorLog: [],
+    lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0, visitorLog: [], inventory: emptyInventory(),
   })
   ui.build = null
   ui.cart = {}
@@ -706,11 +712,16 @@ export const maxShelves = () => LEVELS[game.level].maxShelves
 export const maxFreezers = () => LEVELS[game.level].maxFreezers
 export const maxMeat = () => LEVELS[game.level].maxMeat || 4
 export const maxProduce = () => LEVELS[game.level].maxProduce || 4
-export const shelfCount = () => game.shelves.filter((s) => s.kind === 'shelf' || (!s.kind && !s.fridge)).length
-export const freezerCount = () => game.shelves.filter((s) => s.kind === 'fridge' || (!s.kind && s.fridge)).length
-export const meatCount = () => game.shelves.filter((s) => s.kind === 'meat').length
-export const produceCount = () => new Set(game.shelves.filter((s) => s.kind === 'produce').map((s) => s.groupId || s.id)).size
-export const decorCount = (type) => game.decor.filter((d) => d.type === type).length
+// o limite de cada tipo vale para tudo o que o jogador tem: o que está na loja e o que está guardado no inventário
+// (um móvel que sai do inventário fica nas duas listas enquanto está na mão: conta uma vez só)
+const ownedShelves = () => { const inv = game.inventory?.shelves || []; return [...game.shelves.filter((s) => !inv.includes(s)), ...inv] }
+const ownedDecor = () => { const inv = game.inventory?.decor || []; return [...game.decor.filter((d) => !inv.includes(d)), ...inv] }
+export const shelfCount = () => ownedShelves().filter((s) => s.kind === 'shelf' || (!s.kind && !s.fridge)).length
+export const freezerCount = () => ownedShelves().filter((s) => s.kind === 'fridge' || (!s.kind && s.fridge)).length
+export const meatCount = () => ownedShelves().filter((s) => s.kind === 'meat').length
+export const produceCount = () => new Set(ownedShelves().filter((s) => s.kind === 'produce').map((s) => s.groupId || s.id)).size
+export const decorCount = (type) => ownedDecor().filter((d) => d.type === type).length
+export const storedDecorCount = (type) => (game.inventory?.decor || []).filter((d) => d.type === type).length
 export function sellDecor(type) {
   const list = game.decor.filter((d) => d.type === type)
   if (!list.length || !DECOR[type]?.price) return
@@ -840,15 +851,17 @@ export function switchBranch(targetId) {
     id: game.branchId, name: game.branchName, region: game.region, level: game.level,
     plan: snap(game.plan), shelves: snap(game.shelves), register: snap(game.register),
     decor: snap(game.decor), boxes: snap(game.boxes), pending: snap(game.pending),
-    team: snap(game.team), cafe: snap(game.cafe), doormat: snap(game.doormat), dirt: snap(game.dirt),
+    team: snap(game.team), cafe: snap(game.cafe), doormat: snap(game.doormat), dirt: snap(game.dirt), inventory: snap(game.inventory || emptyInventory()),
   }
   const next = game.branches.splice(idx, 1, cur)[0]
   Object.assign(game, {
     branchId: next.id, branchName: next.name, region: next.region, level: next.level || 0,
     plan: next.plan, shelves: next.shelves || [], register: next.register || defaultRegister(next.plan),
     decor: next.decor || [], boxes: next.boxes || [], pending: next.pending || [],
-    team: next.team || [], cafe: next.cafe || null, doormat: next.doormat || null, dirt: next.dirt || [],
+    team: next.team || [], cafe: next.cafe || null, doormat: next.doormat || null, dirt: next.dirt || [], inventory: next.inventory || emptyInventory(),
   })
+  game.inventory.shelves.forEach((s) => { s.id = uid(); s.techAt = null })
+  game.inventory.decor.forEach((d) => { d.id = uid() })
   game.shelves.forEach((s) => { s.id = uid(); s.techAt = null })
   game.boxes.forEach((b) => { b.id = uid(); b.res = null })
   game.decor.forEach((d) => { d.id = uid() })
@@ -1000,7 +1013,7 @@ export function load() {
     if (!parsed || parsed._deleted) return false
     const { cart, log, _rev, ...d } = parsed
     // saves de versões anteriores não têm os campos novos: entram os valores padrão
-    Object.assign(game, { market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {}, plan: basePlan(d.level || 0), career: newCareer(), recipes: {}, orders: [], zapOn: true, team: [], candidates: [], pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null, mode: 'normal', pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: 'Matriz', branches: [], lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0, dayUnlocked: {}, expiryPriceMemory: {}, visitorLog: [] }, d, { speed: 1, paused: false })
+    Object.assign(game, { market: noMarket(), forecast: null, nextRumorDay: RUMOR.firstDay, weather: 'mild', cafe: null, lunchOn: false, lunchDone: false, cafePrices: {}, plan: basePlan(d.level || 0), career: newCareer(), recipes: {}, orders: [], zapOn: true, team: [], candidates: [], pass: { claimed: {} }, goals: [], goalsDay: 0, dirt: [], doormat: null, mode: 'normal', pomodoro: newPomodoro(), region: 'residencial', branchId: 'main', branchName: 'Matriz', branches: [], lifetime: newLifetime(), bigGoals: { claimed: {} }, visitedPet: null, tipCount: 0, dayUnlocked: {}, expiryPriceMemory: {}, visitorLog: [], inventory: emptyInventory() }, d, { speed: 1, paused: false })
     if (game.plan && game.plan.built == null) game.plan.built = true
     if (game.plan?.stock && !game.plan.stock.corner) game.plan.stock.corner = 'nw'
     game.shopStyle = { ...defaultShopStyle(), ...(d.shopStyle || {}) }
@@ -1056,6 +1069,13 @@ export function load() {
       s.daysLeft = s.product && s.count > 0 ? (s.daysLeft ?? shelfLifeOf(s.product)) : null
       syncShelfBatches(s)
     })
+    const inv = game.inventory || {}
+    game.inventory = {
+      shelves: (Array.isArray(inv.shelves) ? inv.shelves : []).map((s) => ({ ...s, id: uid(), techAt: null, x: -99, z: -99 })),
+      decor: (Array.isArray(inv.decor) ? inv.decor : []).filter((o) => DECOR[o.type]).map((o) => ({ ...o, id: uid(), x: -99, z: -99 })),
+      cafe: inv.cafe ? { ...inv.cafe, id: uid(), x: -99, z: -99 } : null,
+    }
+    for (const s of game.inventory.shelves) syncShelfBatches(s)
     game.register = game.plan.built === false ? null : (d.register || defaultRegister(game.plan))
     game.decor = game.plan.built === false ? [] : (d.decor || defaultDecor(game.plan)).map((o) => ({ ...o, id: uid() }))
     if (game.plan.built !== false) {
@@ -1069,6 +1089,9 @@ export function load() {
       for (const w of wall) game.decor.push({ id: uid(), z: 0, rot: 0, ...w })
     }
     game.decorV2 = true
+    // as duas luminárias que eram fixas no teto viram decoração que se move (saves antigos ganham as duas)
+    if (d.decor && !d.pendantsV1 && game.plan.built !== false) for (const p of defaultPendants(game.plan)) game.decor.push({ ...p, id: uid() })
+    game.pendantsV1 = true
     if (!game.shelves.some((s) => s.fridge)) for (const f of freezers) addShelf({ ...f, fridge: true })
     // saves de antes das regras de seção: prateleira vazia com produto que não vai mais nela fica livre; com itens, avisa para esvaziar
     let misplaced = 0
@@ -1125,7 +1148,7 @@ export function setShopStyle(patch) {
 }
 
 export function cycleWallMode() {
-  const order = ['full', 'transparent', 'none']
+  const order = ['full', 'transparent', 'back', 'none']
   const cur = game.shopStyle?.wallMode || 'full'
   const next = order[(order.indexOf(cur) + 1) % order.length]
   setShopStyle({ wallMode: next })

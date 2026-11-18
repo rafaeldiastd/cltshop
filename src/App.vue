@@ -4,9 +4,9 @@ import { Renderer } from './game/renderer.js'
 import { world } from './game/world.js'
 import { loadAssets } from './game/assets.js'
 import { startMusic, setMusic, setSfx } from './game/audio.js'
-import { game, ui, settings, newGame, load, save, pranksLeft, savesList, money, nextTipCost, nextTipXp, tipsLeft } from './game/state.js'
+import { game, ui, settings, newGame, load, save, pranksLeft, savesList, money, nextTipCost, nextTipXp, tipsLeft, toast } from './game/state.js'
 import { onClick, hoverText } from './game/controls.js'
-import { moveHeld, rotateHeld, rotateAt, sellHeld, sellAt, deselectTool, stopEdit, toggleProduceStyle } from './game/editor.js'
+import { moveHeld, rotateHeld, rotateAt, sellHeld, sellAt, deselectTool, stopEdit, toggleProduceStyle, storeHeld, storeAt, setEditTab } from './game/editor.js'
 import TopBar from './components/TopBar.vue'
 import BottomBar from './components/BottomBar.vue'
 import ToastStack from './components/ToastStack.vue'
@@ -18,9 +18,9 @@ import ThiefAlert from './components/ThiefAlert.vue'
 import CafePanel from './components/CafePanel.vue'
 import NpcPanel from './components/NpcPanel.vue'
 import StaffBar from './components/StaffBar.vue'
-import BuildMode from './components/BuildMode.vue'
+import EditorPanel from './components/EditorPanel.vue'
 import PetModal from './components/PetModal.vue'
-import { stopBuild } from './game/build.js'
+import { buildEscape } from './game/build.js'
 import { PhCrosshair } from '@phosphor-icons/vue'
 import MusicPanel from './components/MusicPanel.vue'
 import CloudLock from './components/CloudLock.vue'
@@ -100,15 +100,21 @@ onMounted(async () => {
   }
   addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (ui.build) { stopBuild(); return }
+      if (ui.build) { // aba Construção: solta a seleção primeiro; sem nada pendente, volta para os móveis
+        const r = buildEscape()
+        if (r === 'leave') { if (game.plan.built === false) stopEdit(); else setEditTab('shelves') }
+        else if (r === 'pending') toast('Aplique ou descarte a obra antes de sair', 'bad')
+        return
+      }
       if (ui.editing) { if (ui.held || ui.buyTool) deselectTool(); else stopEdit(); return }
       ui.selectedBox = null; ui.panelShelf = null; ui.panelCafe = false; ui.npc = null; ui.panelArcade = null
       ui.modal = (ui.modal === 'summary' || (ui.modal === 'start' && !savesList.length)) ? ui.modal : null
       return
     }
-    if (ui.modal || ui.build || typing(e) || e.metaKey || e.ctrlKey) return
-    if (MOVE_MAP[e.code]) { world.keys.add(MOVE_MAP[e.code]); startMusic(); e.preventDefault(); return }
+    if (ui.modal || typing(e) || e.metaKey || e.ctrlKey) return
     if (CAM_MAP[e.code]) { rend?.camKeys.add(CAM_MAP[e.code]); startMusic(); e.preventDefault(); return }
+    if (ui.build) return
+    if (MOVE_MAP[e.code]) { world.keys.add(MOVE_MAP[e.code]); startMusic(); e.preventDefault(); return }
     if (e.code === 'Space' && !e.repeat && !ui.modal && document.activeElement?.tagName !== 'BUTTON') {
       if (game.phase === 'open' || game.phase === 'closing') game.paused = !game.paused
       e.preventDefault()
@@ -143,6 +149,7 @@ onMounted(async () => {
       if (ui.held) rotateHeld(dir); else rotateAt(rend.hover, dir)
       return
     }
+    if (e.code === 'KeyI' && ui.editing && !e.repeat) { if (ui.held) storeHeld(); else storeAt(rend.hover); return }
     if (e.code === 'KeyM' && (ui.held?.kind === 'produceGroup' || ui.held?.isNew) && !e.repeat) { toggleProduceStyle(); return }
     if (e.code === 'KeyE' && !e.repeat) {
       startMusic()
@@ -178,7 +185,7 @@ onBeforeUnmount(() => {
     <NpcPanel />
     <ArcadePanel />
     <StaffBar />
-    <BuildMode />
+    <EditorPanel />
     <BottomBar />
     <MusicPanel />
     <ThiefAlert />
